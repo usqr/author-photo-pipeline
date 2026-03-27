@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Server
+.server.pid
+pipeline.log
+progress.json
+
+# Backup
+.bkp/
+
+# AI models (downloaded on first run)
+*.onnx
+
+# Run archives (generated, reproducible from source + ratings)
+260326_*/
+260327_*/
+
+# Generated step folders (reproducible)
+step1_upscaled/
+step2_nobg/
+step3_bw/
+step4_rainbow/
+baseline_bw/
+baseline_rainbow/

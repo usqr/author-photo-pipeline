@@ -1,0 +1,322 @@
+{
+  "005.jpg": {
+    "lightness": 40,
+    "contrast": -10,
+    "dark_areas": -80,
+    "light_areas": 10
+  },
+  "350920085-b78c2b00-7824-47a2-b2f4-f1a028bd9c5a (1).webp": {
+    "contrast": -10,
+    "dark_areas": -50,
+    "light_areas": -10,
+    "sharpness": 20,
+    "detail": 10
+  },
+  "379686776-cb0e3348-5aab-4ff5-a2b5-6bd5dfde0452 (1).webp": {
+    "lightness": 20,
+    "contrast": 10,
+    "light_areas": -10,
+    "sharpness": 50,
+    "pixelization": 40,
+    "detail": 10
+  },
+  "Dan-OKeefe.webp": {
+    "lightness": 20,
+    "contrast": -30,
+    "dark_areas": -90,
+    "detail": 30
+  },
+  "Marcin Dusza - Bio Photo.webp": {
+    "lightness": -30,
+    "contrast": 70,
+    "light_areas": -20
+  },
+  "Ondrej-Chrastina.webp": {
+    "lightness": 40,
+    "contrast": -50,
+    "dark_areas": -80,
+    "light_areas": -20,
+    "sharpness": 10,
+    "pixelization": -90,
+    "detail": 60
+  },
+  "T03UQQ7LL-U03UQRP0C-cdefe8a2504c-512.webp": {
+    "pixelization": -20
+  },
+  "aleksandra.webp": {
+    "sharpness": 60,
+    "pixelization": -80,
+    "detail": 60
+  },
+  "anna.jpg": {
+    "lightness": -20,
+    "contrast": 30,
+    "dark_areas": -50,
+    "light_areas": -40,
+    "sharpness": 20,
+    "pixelization": -100,
+    "detail": 100
+  },
+  "arkadiuszf.jpg": {
+    "lightness": 20,
+    "contrast": -40,
+    "dark_areas": -50,
+    "pixelization": -60,
+    "detail": 70
+  },
+  "bartekb.jpg": {
+    "contrast": -10,
+    "dark_areas": -20,
+    "light_areas": -70,
+    "sharpness": 20,
+    "pixelization": -90,
+    "detail": 100
+  },
+  "brendan.webp": {
+    "contrast": 20,
+    "sharpness": 70,
+    "pixelization": -40,
+    "detail": 50
+  },
+  "comandeer-b32e0a15f0.webp": {
+    "contrast": 20,
+    "light_areas": -20,
+    "sharpness": 60,
+    "detail": 30
+  },
+  "dimace.webp": {
+    "dark_areas": -30,
+    "sharpness": 30,
+    "pixelization": -50,
+    "detail": 50
+  },
+  "dominik (1).jpg": {
+    "contrast": -10,
+    "sharpness": 50,
+    "pixelization": -30,
+    "detail": 50
+  },
+  "dominik.jpg": {
+    "dark_areas": 10,
+    "sharpness": 30,
+    "pixelization": 40,
+    "detail": 90
+  },
+  "dominika.jpg": {
+    "lightness": -20,
+    "contrast": 30,
+    "dark_areas": 20,
+    "light_areas": -20,
+    "sharpness": 20,
+    "detail": 20
+  },
+  "eliseb.webp": {
+    "contrast": 50,
+    "light_areas": -40,
+    "sharpness": 50,
+    "pixelization": 20,
+    "detail": 70
+  },
+  "filipt.jpg": {
+    "lightness": -30,
+    "contrast": 20,
+    "dark_areas": 30,
+    "light_areas": -20,
+    "sharpness": 30,
+    "pixelization": -40,
+    "detail": 30
+  },
+  "fred.jpg": {
+    "lightness": 60,
+    "contrast": 10,
+    "dark_areas": -50,
+    "light_areas": -20,
+    "sharpness": 50,
+    "pixelization": 10,
+    "detail": 70
+  },
+  "jacekb.webp": {
+    "lightness": 80,
+    "contrast": 20,
+    "dark_areas": -30,
+    "light_areas": -50,
+    "sharpness": 60,
+    "pixelization": -10,
+    "detail": 40
+  },
+  "jodator.webp": {
+    "lightness": 30,
+    "contrast": -10,
+    "dark_areas": -30,
+    "light_areas": -10,
+    "sharpness": 30,
+    "pixelization": -60,
+    "detail": 40
+  },
+  "kit.webp": {
+    "lightness": -30,
+    "contrast": 30,
+    "dark_areas": 10
+  },
+  "kkrzton.jpg": {
+    "lightness": -20,
+    "contrast": -10,
+    "sharpness": 50,
+    "pixelization": -20,
+    "detail": 50
+  },
+  "lukasz-2b8b562311 (1).jpg": {
+    "lightness": 40,
+    "contrast": -10,
+    "dark_areas": -50,
+    "light_areas": -10,
+    "sharpness": 10,
+    "pixelization": -20,
+    "detail": 60
+  },
+  "lukaszdrobnik.jpg": {
+    "sharpness": -30
+  },
+  "maciej.jpg": {
+    "lightness": -10,
+    "contrast": -20,
+    "dark_areas": -10,
+    "light_areas": 10,
+    "sharpness": 60,
+    "detail": 100
+  },
+  "marek.jpg": {
+    "contrast": 40,
+    "sharpness": 70,
+    "pixelization": -80,
+    "detail": 80
+  },
+  "marta.webp": {
+    "lightness": 30,
+    "contrast": -10,
+    "dark_areas": -10,
+    "light_areas": 20,
+    "sharpness": 40,
+    "pixelization": -50,
+    "detail": 60
+  },
+  "mateuszpytel.webp": {
+    "lightness": 20,
+    "dark_areas": -10,
+    "light_areas": -10,
+    "sharpness": 20,
+    "detail": 30
+  },
+  "mrina.webp": {
+    "lightness": -40,
+    "contrast": -30,
+    "dark_areas": 30,
+    "light_areas": -40,
+    "sharpness": 20,
+    "pixelization": -50,
+    "detail": 90
+  },
+  "olek (1).jpg": {
+    "lightness": 40,
+    "contrast": -40,
+    "dark_areas": -40,
+    "light_areas": -10,
+    "sharpness": 20,
+    "pixelization": 40,
+    "detail": 100
+  },
+  "olek.jpg": {
+    "lightness": -20,
+    "contrast": -30,
+    "dark_areas": -70,
+    "light_areas": -30,
+    "pixelization": -10,
+    "detail": 100
+  },
+  "pawel.jpg": {
+    "lightness": -10,
+    "contrast": 10,
+    "light_areas": -10,
+    "sharpness": -10,
+    "pixelization": -80,
+    "detail": 100
+  },
+  "pj.webp": {
+    "lightness": 40,
+    "contrast": 20,
+    "dark_areas": -50,
+    "light_areas": -20,
+    "sharpness": 20,
+    "pixelization": -90,
+    "detail": 60
+  },
+  "pm (1).jpg": {
+    "contrast": 10,
+    "dark_areas": -10,
+    "light_areas": -10,
+    "pixelization": -20,
+    "detail": 70
+  },
+  "profile-pz.webp": {
+    "lightness": -10,
+    "contrast": 10,
+    "dark_areas": 10,
+    "light_areas": -10,
+    "sharpness": 50,
+    "pixelization": -100,
+    "detail": 100
+  },
+  "rmikolajuk.webp": {
+    "lightness": 80,
+    "contrast": 10,
+    "light_areas": -30,
+    "sharpness": 30,
+    "pixelization": -50,
+    "detail": 70
+  },
+  "roman-khudonogov.webp": {
+    "lightness": 20,
+    "contrast": -10,
+    "dark_areas": 10,
+    "light_areas": -10,
+    "sharpness": -10,
+    "pixelization": 20
+  },
+  "sebstefanov.jpg": {
+    "lightness": -10,
+    "contrast": 20,
+    "dark_areas": 30,
+    "sharpness": 20,
+    "detail": 100
+  },
+  "szymon.jpg": {
+    "lightness": -20,
+    "contrast": 10,
+    "sharpness": 80,
+    "pixelization": -10,
+    "detail": 70
+  },
+  "tobiaszcudnik.webp": {
+    "lightness": -10,
+    "contrast": 10,
+    "dark_areas": -10,
+    "light_areas": -10,
+    "sharpness": 30,
+    "pixelization": -20,
+    "detail": 100
+  },
+  "vadims-7ef14c13d8.webp": {
+    "lightness": -10,
+    "contrast": 40,
+    "dark_areas": 40,
+    "light_areas": -20,
+    "sharpness": 60,
+    "pixelization": -30,
+    "detail": 100
+  },
+  "witolds.jpg": {
+    "contrast": -10,
+    "dark_areas": -10,
+    "light_areas": 10
+  }
+}
