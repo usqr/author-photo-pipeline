@@ -18,6 +18,25 @@ class PipelineHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/progress":
             self.send_json_file(BASE / "progress.json")
+        elif self.path == "/api/run_info":
+            self.send_json_file(BASE / "run_info.json")
+        elif self.path == "/api/files":
+            # List image files in webp/
+            import json as jmod
+            webp = BASE / "webp"
+            exts = {".webp", ".jpg", ".jpeg", ".png"}
+            files = [
+                {"name": f.name, "stem": f.stem}
+                for f in sorted(webp.iterdir(), key=lambda x: x.name)
+                if f.suffix.lower() in exts
+            ]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(jmod.dumps(files).encode())
+        elif self.path == "/api/ratings":
+            self.send_json_file(BASE / "ratings.json")
         else:
             super().do_GET()
 

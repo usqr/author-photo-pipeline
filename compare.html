@@ -57,9 +57,9 @@ textarea{width:90%;height:150px;background:#0a0a1a;color:#4ecca3;border:1px soli
 h2{margin-top:25px;font-size:16px}
 </style></head><body>
 <h1>Author Photo Pipeline</h1>
-<div class="legend">
-<span><span style="color:#4ecca3">&#9632;</span> Current (260327_0015)</span>
-<span><span style="color:#f0a500">&#9632;</span> Previous (260326_2315) — orange slider markers</span>
+<div class="legend" id="legend">
+<span><span style="color:#4ecca3">&#9632;</span> Current (<span id="legend-new">...</span>)</span>
+<span><span style="color:#f0a500">&#9632;</span> Previous (<span id="legend-prev">...</span>) — orange slider markers</span>
 <span><span style="color:#e94560">&#9632;</span> Baseline (no weights)</span>
 </div>
 
@@ -88,14 +88,7 @@ h2{margin-top:25px;font-size:16px}
 <span class="badge" style="background:#3a2a00;color:#f0a500" onclick="filterRows('changed')" id="badge-changed">Changed</span>
 </div>
 <h2>Reference</h2>
-<div class="ref-row">
-<div class="card"><img src="webp/gokce-f3ee914ba0%20(1).jpg"><div class="label">Original</div></div>
-<div class="card"><img src="260327_0015/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #4ecca3"><div class="label cn">New</div></div>
-<div class="card"><img src="260326_2315/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #f0a500"><div class="label cp">Prev</div></div>
-<div class="card"><img src="baseline_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #e94560"><div class="label cb">Base</div></div>
-<div class="card"><img src="bw.png" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF bw</div></div>
-<div class="card"><img src="rainbow_Gokce.jpg" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF rainbow</div></div>
-</div>
+<div class="ref-row" id="ref-row"></div>
 <h2>All Authors</h2>
 <div id="grid"></div>
 <div class="export-area">
@@ -103,15 +96,15 @@ h2{margin-top:25px;font-size:16px}
 <textarea id="jsonArea"></textarea>
 </div>
 <script>
-var NR="260327_0015",PR="260326_2315";
-var PREV_RATINGS={"005.jpg": {"lightness": 40, "contrast": -10, "dark_areas": -80, "light_areas": 10}, "350920085-b78c2b00-7824-47a2-b2f4-f1a028bd9c5a (1).webp": {"contrast": -10, "dark_areas": -50, "light_areas": -10, "sharpness": 20, "detail": 10}, "379686776-cb0e3348-5aab-4ff5-a2b5-6bd5dfde0452 (1).webp": {"lightness": 20, "contrast": 10, "light_areas": -10, "sharpness": 50, "pixelization": 40, "detail": 10}, "Dan-OKeefe.webp": {"lightness": 20, "contrast": -30, "dark_areas": -90, "detail": 30}, "Marcin Dusza - Bio Photo.webp": {"lightness": -30, "contrast": 70, "light_areas": -20}, "Ondrej-Chrastina.webp": {"lightness": 40, "contrast": -50, "dark_areas": -80, "light_areas": -20, "sharpness": 10, "pixelization": -90, "detail": 60}, "T03UQQ7LL-U03UQRP0C-cdefe8a2504c-512.webp": {"pixelization": -20}, "aleksandra.webp": {"sharpness": 60, "pixelization": -80, "detail": 60}, "anna.jpg": {"lightness": -20, "contrast": 30, "dark_areas": -50, "light_areas": -40, "sharpness": 20, "pixelization": -100, "detail": 100}, "arkadiuszf.jpg": {"lightness": 20, "contrast": -40, "dark_areas": -50, "pixelization": -60, "detail": 70}, "bartekb.jpg": {"contrast": -10, "dark_areas": -20, "light_areas": -70, "sharpness": 20, "pixelization": -90, "detail": 100}, "brendan.webp": {"contrast": 20, "sharpness": 70, "pixelization": -40, "detail": 50}, "comandeer-b32e0a15f0.webp": {"contrast": 20, "light_areas": -20, "sharpness": 60, "detail": 30}, "dimace.webp": {"dark_areas": -30, "sharpness": 30, "pixelization": -50, "detail": 50}, "dominik (1).jpg": {"contrast": -10, "sharpness": 50, "pixelization": -30, "detail": 50}, "dominik.jpg": {"dark_areas": 10, "sharpness": 30, "pixelization": 40, "detail": 90}, "dominika.jpg": {"lightness": -20, "contrast": 30, "dark_areas": 20, "light_areas": -20, "sharpness": 20, "detail": 20}, "eliseb.webp": {"contrast": 50, "light_areas": -40, "sharpness": 50, "pixelization": 20, "detail": 70}, "filipt.jpg": {"lightness": -30, "contrast": 20, "dark_areas": 30, "light_areas": -20, "sharpness": 30, "pixelization": -40, "detail": 30}, "fred.jpg": {"lightness": 60, "contrast": 10, "dark_areas": -50, "light_areas": -20, "sharpness": 50, "pixelization": 10, "detail": 70}, "jacekb.webp": {"lightness": 80, "contrast": 20, "dark_areas": -30, "light_areas": -50, "sharpness": 60, "pixelization": -10, "detail": 40}, "jodator.webp": {"lightness": 30, "contrast": -10, "dark_areas": -30, "light_areas": -10, "sharpness": 30, "pixelization": -60, "detail": 40}, "kit.webp": {"lightness": -30, "contrast": 30, "dark_areas": 10}, "kkrzton.jpg": {"lightness": -20, "contrast": -10, "sharpness": 50, "pixelization": -20, "detail": 50}, "lukasz-2b8b562311 (1).jpg": {"lightness": 40, "contrast": -10, "dark_areas": -50, "light_areas": -10, "sharpness": 10, "pixelization": -20, "detail": 60}, "lukaszdrobnik.jpg": {"sharpness": -30}, "maciej.jpg": {"lightness": -10, "contrast": -20, "dark_areas": -10, "light_areas": 10, "sharpness": 60, "detail": 100}, "marek.jpg": {"contrast": 40, "sharpness": 70, "pixelization": -80, "detail": 80}, "marta.webp": {"lightness": 30, "contrast": -10, "dark_areas": -10, "light_areas": 20, "sharpness": 40, "pixelization": -50, "detail": 60}, "mateuszpytel.webp": {"lightness": 20, "dark_areas": -10, "light_areas": -10, "sharpness": 20, "detail": 30}, "mrina.webp": {"lightness": -40, "contrast": -30, "dark_areas": 30, "light_areas": -40, "sharpness": 20, "pixelization": -50, "detail": 90}, "olek (1).jpg": {"lightness": 40, "contrast": -40, "dark_areas": -40, "light_areas": -10, "sharpness": 20, "pixelization": 40, "detail": 100}, "olek.jpg": {"lightness": -20, "contrast": -30, "dark_areas": -70, "light_areas": -30, "pixelization": -10, "detail": 100}, "pawel.jpg": {"lightness": -10, "contrast": 10, "light_areas": -10, "sharpness": -10, "pixelization": -80, "detail": 100}, "pj.webp": {"lightness": 40, "contrast": 20, "dark_areas": -50, "light_areas": -20, "sharpness": 20, "pixelization": -90, "detail": 60}, "pm (1).jpg": {"contrast": 10, "dark_areas": -10, "light_areas": -10, "pixelization": -20, "detail": 70}, "profile-pz.webp": {"lightness": -10, "contrast": 10, "dark_areas": 10, "light_areas": -10, "sharpness": 50, "pixelization": -100, "detail": 100}, "rmikolajuk.webp": {"lightness": 80, "contrast": 10, "light_areas": -30, "sharpness": 30, "pixelization": -50, "detail": 70}, "roman-khudonogov.webp": {"lightness": 20, "contrast": -10, "dark_areas": 10, "light_areas": -10, "sharpness": -10, "pixelization": 20}, "sebstefanov.jpg": {"lightness": -10, "contrast": 20, "dark_areas": 30, "sharpness": 20, "detail": 100}, "szymon.jpg": {"lightness": -20, "contrast": 10, "sharpness": 80, "pixelization": -10, "detail": 70}, "tobiaszcudnik.webp": {"lightness": -10, "contrast": 10, "dark_areas": -10, "light_areas": -10, "sharpness": 30, "pixelization": -20, "detail": 100}, "vadims-7ef14c13d8.webp": {"lightness": -10, "contrast": 40, "dark_areas": 40, "light_areas": -20, "sharpness": 60, "pixelization": -30, "detail": 100}, "witolds.jpg": {"contrast": -10, "dark_areas": -10, "light_areas": 10}};
+var NR="",PR="";
+var PREV_RATINGS={};
 var SCALES=[
 {key:"lightness",label:"Lightness"},{key:"contrast",label:"Contrast"},
 {key:"dark_areas",label:"Dark Areas"},{key:"light_areas",label:"Light Areas"},
 {key:"sharpness",label:"Sharpness"},{key:"pixelization",label:"Pixelization"},
 {key:"detail",label:"Detail"}
 ];
-var FILES=[{"name": "005.jpg", "stem": "005"}, {"name": "350920085-b78c2b00-7824-47a2-b2f4-f1a028bd9c5a (1).webp", "stem": "350920085-b78c2b00-7824-47a2-b2f4-f1a028bd9c5a (1)"}, {"name": "379686776-cb0e3348-5aab-4ff5-a2b5-6bd5dfde0452 (1).webp", "stem": "379686776-cb0e3348-5aab-4ff5-a2b5-6bd5dfde0452 (1)"}, {"name": "Dan Wilson-green-sweater - w1200 h1200 - colored background - CK Purple.webp", "stem": "Dan Wilson-green-sweater - w1200 h1200 - colored background - CK Purple"}, {"name": "Dan-OKeefe.webp", "stem": "Dan-OKeefe"}, {"name": "Marcin Dusza - Bio Photo.webp", "stem": "Marcin Dusza - Bio Photo"}, {"name": "Ondrej-Chrastina.webp", "stem": "Ondrej-Chrastina"}, {"name": "T03UQQ7LL-U03UQRP0C-cdefe8a2504c-512.webp", "stem": "T03UQQ7LL-U03UQRP0C-cdefe8a2504c-512"}, {"name": "aleksandra.webp", "stem": "aleksandra"}, {"name": "anna.jpg", "stem": "anna"}, {"name": "arkadiuszf.jpg", "stem": "arkadiuszf"}, {"name": "bartekb.jpg", "stem": "bartekb"}, {"name": "brendan.webp", "stem": "brendan"}, {"name": "comandeer-b32e0a15f0.webp", "stem": "comandeer-b32e0a15f0"}, {"name": "dimace.webp", "stem": "dimace"}, {"name": "dominik (1).jpg", "stem": "dominik (1)"}, {"name": "dominik.jpg", "stem": "dominik"}, {"name": "dominika.jpg", "stem": "dominika"}, {"name": "eliseb.webp", "stem": "eliseb"}, {"name": "filips-2b4ba2bbe5.webp", "stem": "filips-2b4ba2bbe5"}, {"name": "filipt.jpg", "stem": "filipt"}, {"name": "fred.jpg", "stem": "fred"}, {"name": "gokce-f3ee914ba0 (1).jpg", "stem": "gokce-f3ee914ba0 (1)"}, {"name": "jacekb.webp", "stem": "jacekb"}, {"name": "jodator.webp", "stem": "jodator"}, {"name": "kit.webp", "stem": "kit"}, {"name": "kkrzton.jpg", "stem": "kkrzton"}, {"name": "lukasz-2b8b562311 (1).jpg", "stem": "lukasz-2b8b562311 (1)"}, {"name": "lukaszdrobnik.jpg", "stem": "lukaszdrobnik"}, {"name": "maciej.jpg", "stem": "maciej"}, {"name": "marek.jpg", "stem": "marek"}, {"name": "marta.webp", "stem": "marta"}, {"name": "mateuszpytel.webp", "stem": "mateuszpytel"}, {"name": "mrina.webp", "stem": "mrina"}, {"name": "olek (1).jpg", "stem": "olek (1)"}, {"name": "olek.jpg", "stem": "olek"}, {"name": "pawel.jpg", "stem": "pawel"}, {"name": "pj.webp", "stem": "pj"}, {"name": "pm (1).jpg", "stem": "pm (1)"}, {"name": "pm.jpg", "stem": "pm"}, {"name": "profile-pz.webp", "stem": "profile-pz"}, {"name": "rmikolajuk.webp", "stem": "rmikolajuk"}, {"name": "roman-khudonogov.webp", "stem": "roman-khudonogov"}, {"name": "sebstefanov.jpg", "stem": "sebstefanov"}, {"name": "szymon.jpg", "stem": "szymon"}, {"name": "tobiaszcudnik.webp", "stem": "tobiaszcudnik"}, {"name": "vadims-7ef14c13d8.webp", "stem": "vadims-7ef14c13d8"}, {"name": "witolds.jpg", "stem": "witolds"}];
+var FILES=[];
 var ratings={};
 function gpv(n,k){return PREV_RATINGS[n]&&PREV_RATINGS[n][k]!==undefined?PREV_RATINGS[n][k]:0;}
 function gp(v){return((v+100)/200)*100;}
@@ -234,10 +227,51 @@ function checkRunning(){
 }
 
 var st;function as(){clearTimeout(st);st=setTimeout(function(){localStorage.setItem("arV5h",JSON.stringify(ratings));},1000);}
-window.addEventListener("load",function(){
+
+function buildRefRow(){
+  var en=encodeURIComponent;
+  var ref=document.getElementById("ref-row");
+  ref.innerHTML=
+    '<div class="card"><img src="webp/gokce-f3ee914ba0%20(1).jpg"><div class="label">Original</div></div>'+
+    (NR?'<div class="card"><img src="'+NR+'/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #4ecca3"><div class="label cn">New</div></div>':'')+
+    (PR?'<div class="card"><img src="'+PR+'/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #f0a500"><div class="label cp">Prev</div></div>':'')+
+    '<div class="card"><img src="baseline_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #e94560"><div class="label cb">Base</div></div>'+
+    '<div class="card"><img src="bw.png" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF bw</div></div>'+
+    '<div class="card"><img src="rainbow_Gokce.jpg" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF rainbow</div></div>';
+}
+
+async function loadDynamic(){
+  // Fetch run info
+  try{
+    var ri=await fetch("/api/run_info").then(function(r){return r.json();});
+    NR=ri.current||"";
+    PR=ri.previous||"";
+  }catch(e){
+    // Fallback to step4_rainbow/ if no run_info
+    NR=""; PR="";
+  }
+  document.getElementById("legend-new").textContent=NR||"current";
+  document.getElementById("legend-prev").textContent=PR||"none";
+
+  // Fetch file list
+  try{
+    FILES=await fetch("/api/files").then(function(r){return r.json();});
+  }catch(e){FILES=[];}
+
+  // Fetch current ratings as prev_ratings
+  try{
+    PREV_RATINGS=await fetch("/api/ratings").then(function(r){return r.json();});
+  }catch(e){PREV_RATINGS={};}
+
+  // Build page
+  buildRefRow();
   init();
   checkRunning();
+
+  // Restore from localStorage
   var s=localStorage.getItem("arV5h");
   if(s){try{var d=JSON.parse(s);FILES.forEach(function(f,i){if(!d[f.name])return;SCALES.forEach(function(s){var v=d[f.name][s.key]||0;ratings[f.name][s.key]=v;document.getElementById("s-"+i+"-"+s.key).value=v;var e=document.getElementById("v-"+i+"-"+s.key);e.textContent=v;e.className="sv "+(v<0?"neg":v>0?"pos":"zero");});document.getElementById("row-"+i).className="author-row "+(SCALES.some(function(s){return ratings[f.name][s.key]!==0;})?"row-issue":"row-ok");});us();}catch(e){}}
-});
+}
+
+window.addEventListener("load",loadDynamic);
 </script></body></html>

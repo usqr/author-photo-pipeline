@@ -12,12 +12,11 @@ Reads ratings.json for per-image adjustments.
 """
 
 from pathlib import Path
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageOps
 from skimage.metrics import structural_similarity as ssim
 import cv2
 import json
 import numpy as np
-import subprocess
 import sys
 import tempfile
 
@@ -27,6 +26,7 @@ RAINBOW_BG_PATH = BASE_DIR / "rainbow.png"
 BW_REF_PATH = BASE_DIR / "bw.png"
 RAINBOW_REF_PATH = BASE_DIR / "rainbow_Gokce.jpg"
 RATINGS_PATH = BASE_DIR / "ratings.json"
+PREV_RATINGS_PATH = BASE_DIR / "prev_ratings.json"
 
 STEP1_DIR = BASE_DIR / "step1_upscaled"
 STEP2_DIR = BASE_DIR / "step2_nobg"
@@ -77,6 +77,45 @@ def load_ratings():
     return {}
 
 
+def load_prev_ratings():
+    if PREV_RATINGS_PATH.exists():
+        with open(PREV_RATINGS_PATH) as f:
+            return json.load(f)
+    return None
+
+
+def save_prev_ratings(ratings):
+    """Save current ratings as prev for next run's diff."""
+    with open(PREV_RATINGS_PATH, "w") as f:
+        json.dump(ratings, f, indent=2)
+
+
+def get_changed_files(ratings, prev_ratings, all_files):
+    """Return list of files whose ratings changed since last run.
+    If no prev_ratings exist, return all files.
+    """
+    if prev_ratings is None:
+        print("No previous ratings found — processing all files.")
+        return all_files
+
+    changed = []
+    for f in all_files:
+        name = f.name
+        cur = ratings.get(name, {})
+        prev = prev_ratings.get(name, {})
+        if cur != prev:
+            changed.append(f)
+
+    if not changed:
+        print("No rating changes detected — nothing to re-process.")
+    else:
+        print(f"{len(changed)} files with changed ratings (out of {len(all_files)} total):")
+        for f in changed:
+            print(f"  - {f.name}")
+
+    return changed
+
+
 def get_rating(ratings, filename, key, default=0):
     if filename in ratings and key in ratings[filename]:
         return ratings[filename][key]
@@ -98,83 +137,150 @@ def save_img(img, path):
 
 # ── Pass 1: Upscale ──────────────────────────────────────────────────────────
 
-def run_pass1(files, ratings):
-    """Upscale pass — loads EDSR model only."""
-    from super_image import EdsrModel, ImageLoader as IL
+def ai_upscale(img_rgb, model, IL):
+    """Run a super_image model on an RGB PIL image, return RGBA result."""
+    inputs = IL.load_image(img_rgb)
+    preds = model(inputs)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+        tmp = tf.name
+    IL.save_image(preds, tmp)
+    result = Image.open(tmp).convert("RGBA")
+    Path(tmp).unlink(missing_ok=True)
+    return result
 
-    print("Loading EDSR model...")
-    model = EdsrModel.from_pretrained("eugenesiow/edsr-base", scale=2)
-    print("EDSR loaded.\n")
 
-    for i, f in enumerate(files, 1):
-        fname = f.name
-        print(f"[{i}/{len(files)}] Upscale: {fname}")
-        write_progress(1, "Upscale", i, len(files), fname)
+def run_pass1(files):
+    """Upscale pass — HAN 4x for small images only (<= 500px).
+    Larger images skip AI upscaling (too much memory)."""
+    from super_image import HanModel, ImageLoader as IL
 
-        img = Image.open(f).convert("RGBA")
-        w, h = img.size
-        min_dim = min(w, h)
-        detail_rating = get_rating(ratings, fname, "detail", 0)
-        needs_detail = detail_rating > 0
+    # Split: small images get HAN 4x, everything else skips
+    small_files = []
+    skip_files = []
 
-        if min_dim < AI_UPSCALE_THRESHOLD or needs_detail:
-            # Denoise very small images
+    for f in files:
+        img = Image.open(f)
+        min_dim = min(img.size)
+        if min_dim <= AI_UPSCALE_THRESHOLD:
+            small_files.append(f)
+        else:
+            skip_files.append(f)
+        img.close()
+
+    total = len(files)
+    done = 0
+
+    # HAN 4x for small images
+    if small_files:
+        print(f"Loading HAN 4x for {len(small_files)} small images...")
+        model = HanModel.from_pretrained("eugenesiow/han", scale=4)
+        for f in small_files:
+            done += 1
+            fname = f.name
+            print(f"[{done}/{total}] Upscale: {fname}")
+            write_progress(1, "Upscale (HAN 4x)", done, total, fname)
+            img = Image.open(f).convert("RGBA")
+            w, h = img.size
+            min_dim = min(w, h)
             if min_dim < 250:
                 rgb_np = np.array(img.convert("RGB"))
                 denoised = cv2.fastNlMeansDenoisingColored(rgb_np, None, 6, 6, 7, 21)
                 img = Image.fromarray(denoised).convert("RGBA")
                 print(f"  Denoised {w}x{h}")
-
-            # AI upscale
-            print(f"  AI upscale {w}x{h} → ", end="", flush=True)
-            rgb = img.convert("RGB")
-            inputs = IL.load_image(rgb)
-            preds = model(inputs)
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-                tmp = tf.name
-            IL.save_image(preds, tmp)
-            result = Image.open(tmp).convert("RGBA")
+            print(f"  HAN 4x {w}x{h} → ", end="", flush=True)
+            result = ai_upscale(img.convert("RGB"), model, IL)
             if img.mode == "RGBA":
                 a = img.split()[3]
                 a_up = a.resize(result.size, Image.LANCZOS)
                 r, g, b, _ = result.split()
                 result = Image.merge("RGBA", (r, g, b, a_up))
-            Path(tmp).unlink(missing_ok=True)
             img = result
-            w2, h2 = img.size
-            print(f"{w2}x{h2}")
-
-            # Bilateral smooth for small source images
-            if min_dim < AI_UPSCALE_THRESHOLD:
+            print(f"{img.size[0]}x{img.size[1]}")
+            if min_dim < 300:
                 rgb_np = np.array(img.convert("RGB"))
                 smoothed = cv2.bilateralFilter(rgb_np, d=9, sigmaColor=75, sigmaSpace=75)
-                result = Image.fromarray(smoothed).convert("RGBA")
-                if img.mode == "RGBA":
-                    _, _, _, a = img.split()
-                    r, g, b, _ = result.split()
-                    result = Image.merge("RGBA", (r, g, b, a))
-                img = result
+                sm = Image.fromarray(smoothed).convert("RGBA")
+                _, _, _, a = img.split()
+                r, g, b, _ = sm.split()
+                img = Image.merge("RGBA", (r, g, b, a))
                 print(f"  Bilateral smooth")
+            save_img(img, STEP1_DIR / fname)
+        del model
+        print("HAN 4x unloaded.\n")
 
-            # LANCZOS for remaining scale
-            work_size = TARGET_SIZE * 2
-            if min(img.size) < work_size:
-                scale = work_size / min(img.size)
-                nw, nh = int(img.size[0] * scale), int(img.size[1] * scale)
-                img = img.resize((nw, nh), Image.LANCZOS)
-                print(f"  LANCZOS → {nw}x{nh}")
-        else:
-            work_size = TARGET_SIZE * 2
-            if min_dim < work_size:
-                scale = work_size / min_dim
-                nw, nh = int(w * scale), int(h * scale)
-                img = img.resize((nw, nh), Image.LANCZOS)
-
+    # No AI upscale — just copy/resize to working size
+    for f in skip_files:
+        done += 1
+        fname = f.name
+        print(f"[{done}/{total}] Upscale: {fname} (skip)")
+        write_progress(1, "Upscale (skip)", done, total, fname)
+        img = Image.open(f).convert("RGBA")
+        w, h = img.size
+        min_dim = min(w, h)
+        work_size = TARGET_SIZE * 2
+        if min_dim < work_size:
+            scale = work_size / min_dim
+            nw, nh = int(w * scale), int(h * scale)
+            img = img.resize((nw, nh), Image.LANCZOS)
         save_img(img, STEP1_DIR / fname)
 
-    # Free model memory
-    del model
-    print("\nPass 1 done. EDSR unloaded.\n")
+    print("\nPass 1 done.\n")
+
+
+# ── Pass 1.5: Canvas extension ────────────────────────────────────────────────
+
+CANVAS_PAD = 0.15  # 15% each side
+
+
+def extend_canvas(img_pil, pad_fraction=CANVAS_PAD):
+    """Extend canvas by pad_fraction on each side using reflect + inpaint + gradient blend."""
+    img = np.array(img_pil.convert("RGB"))
+    h, w = img.shape[:2]
+    pad_x = int(w * pad_fraction)
+    pad_y = int(h * pad_fraction)
+
+    # Reflect-pad for initial fill
+    padded = cv2.copyMakeBorder(img, pad_y, pad_y, pad_x, pad_x, cv2.BORDER_REFLECT_101)
+    ph, pw = padded.shape[:2]
+
+    # Gradient blend mask (soft transition at edges)
+    mask = np.zeros((ph, pw), dtype=np.float32)
+    for y in range(pad_y):
+        alpha = 1.0 - (y / pad_y)
+        mask[y, :] = np.maximum(mask[y, :], alpha)
+        mask[ph - 1 - y, :] = np.maximum(mask[ph - 1 - y, :], alpha)
+    for x in range(pad_x):
+        alpha = 1.0 - (x / pad_x)
+        mask[:, x] = np.maximum(mask[:, x], alpha)
+        mask[:, pw - 1 - x] = np.maximum(mask[:, pw - 1 - x], alpha)
+
+    # Inpaint extended areas for seamless content
+    inpaint_mask = (mask > 0.1).astype(np.uint8) * 255
+    inpainted = cv2.inpaint(padded, inpaint_mask, inpaintRadius=12, flags=cv2.INPAINT_TELEA)
+
+    # Blend inpainted edges with reflected content
+    mask_3ch = np.stack([mask] * 3, axis=-1)
+    blended = (inpainted * mask_3ch + padded * (1 - mask_3ch)).astype(np.uint8)
+
+    return Image.fromarray(blended).convert("RGBA")
+
+
+def run_pass1_5(files):
+    """Extend canvas 15% each side on all upscaled images."""
+    for i, f in enumerate(files, 1):
+        fname = f.name
+        s1_path = STEP1_DIR / fname
+        if not s1_path.exists():
+            continue
+
+        print(f"[{i}/{len(files)}] Extend canvas: {fname}")
+        write_progress(1.5, "Canvas Extend", i, len(files), fname)
+
+        img = Image.open(s1_path).convert("RGBA")
+        extended = extend_canvas(img)
+        save_img(extended, s1_path)  # overwrite step1 output
+
+    print("\nPass 1.5 done.\n")
 
 
 # ── Pass 2: Background removal ───────────────────────────────────────────────
@@ -355,6 +461,7 @@ def main():
         d.mkdir(exist_ok=True)
 
     ratings = load_ratings()
+    prev_ratings = load_prev_ratings()
 
     extensions = {".webp", ".jpg", ".jpeg", ".png"}
     all_files = sorted(f for f in WEBP_DIR.iterdir() if f.suffix.lower() in extensions)
@@ -364,13 +471,18 @@ def main():
         files = [f for f in all_files if f.name in targets]
         print(f"Processing {len(files)} specified files.\n")
     else:
-        files = all_files
-        print(f"Processing all {len(files)} images.\n")
+        # Auto-detect: only process files with changed ratings
+        files = get_changed_files(ratings, prev_ratings, all_files)
+        if not files:
+            write_progress_done()
+            print("\nNothing to do.")
+            return
+        print(f"\nProcessing {len(files)} images.\n")
 
     print("=" * 60)
     print("PASS 1: Upscale (EDSR)")
     print("=" * 60)
-    run_pass1(files, ratings)
+    run_pass1(files)
 
     print("=" * 60)
     print("PASS 2: Background removal (BiRefNet)")
@@ -401,6 +513,41 @@ def main():
             if img_arr.shape != ref_arr.shape:
                 img_arr = cv2.resize(img_arr, (ref_arr.shape[1], ref_arr.shape[0]))
             print(f"  SSIM ({label}): {ssim(ref_arr, img_arr):.4f}")
+
+    # Save current ratings as prev for next run's diff
+    save_prev_ratings(ratings)
+
+    # Archive run to timestamped folder and update run_info.json
+    import datetime
+    run_name = datetime.datetime.now().strftime("%y%m%d_%H%M")
+    run_dir = BASE_DIR / run_name
+    run_dir.mkdir(exist_ok=True)
+
+    import shutil
+    for step_dir in [STEP1_DIR, STEP2_DIR, STEP3_DIR, STEP4_DIR]:
+        if step_dir.exists():
+            dest = run_dir / step_dir.name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(step_dir, dest)
+    print(f"Archived to {run_name}/")
+
+    # Read previous run_info to shift current -> previous
+    run_info_path = BASE_DIR / "run_info.json"
+    prev_run = ""
+    if run_info_path.exists():
+        try:
+            old_info = json.loads(run_info_path.read_text())
+            prev_run = old_info.get("current", "")
+        except Exception:
+            pass
+
+    run_info = {
+        "current": run_name,
+        "previous": prev_run,
+    }
+    run_info_path.write_text(json.dumps(run_info, indent=2))
+    print(f"Updated run_info.json: current={run_name}, previous={prev_run}")
 
     write_progress_done()
     print("\nAll done.")

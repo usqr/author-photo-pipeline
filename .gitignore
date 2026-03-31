@@ -9,6 +9,8 @@ __pycache__/
 .server.pid
 pipeline.log
 progress.json
+prev_ratings.json
+run_info.json
 
 # Backup
 .bkp/
