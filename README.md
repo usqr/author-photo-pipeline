@@ -8,12 +8,13 @@ Converts author portrait photos into stylized black & white images on rainbow gr
 
 | Pass | Step | Model | Description |
 |------|------|-------|-------------|
-| 1 | AI Upscale | EDSR | Upscales small/low-res images. `detail > 0` rating triggers upscale for any image. Includes denoising for very small sources (<250px). |
+| 1 | AI Upscale | Gemini Flash Image | Upscales and enhances all portrait photos via Gemini API. Falls back to copying originals if no service account. |
+| 1.5 | Canvas Extend | Gemini Flash Image | Extends canvas ~15% on each side using Gemini to generate natural continuation of body/background. |
 | 2 | Background Removal | BiRefNet Portrait | Removes backgrounds with alpha matting for clean hair/edge separation. |
-| 3 | B&W Conversion | — | Histogram-matched to `bw.png` reference, then per-image brightness/contrast/sharpness/shadow/highlight adjustments from `ratings.json`. |
+| 3 | B&W Conversion | Gemini Flash Image | Gemini converts to high-contrast B&W matching reference style, then per-image adjustments from `ratings.json`. Falls back to local histogram matching. |
 | 4 | Rainbow Composite | — | B&W cutout composited on `rainbow.png` gradient (no downscaling). |
 
-Passes run sequentially with model loading/unloading between them to avoid OOM.
+Passes run **concurrently in a pipeline** — each pass is a thread connected by queues. As soon as Pass 1 finishes an image, Pass 1.5 starts on it while Pass 1 works on the next image.
 
 ## Quick Start
 
@@ -48,7 +49,7 @@ Each image can be rated on 7 scales (-100 to +100, 0 = no change):
 | Light Areas | Too blown out | Needs brighter whites |
 | Sharpness | Oversharpened | Too soft |
 | Pixelization | Visible artifacts | Oversmoothed |
-| Detail | Too busy | Needs more detail (triggers AI upscale) |
+| Detail | Too busy | Needs more detail |
 
 ## Compare Page
 
@@ -58,8 +59,10 @@ The interactive compare page (`http://localhost:8787/compare.html`) provides:
 - **Ghost markers** — Orange markers on sliders show previous run's weight values
 - **Hover to zoom** — 3.5x on current images, 4x on previous/baseline
 - **Filters** — All / Has Issues / OK / Changed from previous
-- **Progress bar** — Live pipeline progress with pass/file info
+- **Progress bar** — Live pipeline progress showing active passes (e.g. "P1+P2+P3")
+- **Progress accordion** — Expandable details per pass with per-file status (done/processing/skipped/error), timing, and mini progress bars
 - **Rerun button** — Saves current weights and re-runs pipeline from the browser
+- **Regen from Pass** — Re-run from a specific pass, reusing earlier step outputs
 - **End All button** — Stops running pipeline and server
 - **Export/Import JSON** — Save and load rating adjustments
 - **Auto-save** — Slider values saved to localStorage
@@ -68,7 +71,7 @@ The interactive compare page (`http://localhost:8787/compare.html`) provides:
 
 | File | Purpose |
 |------|---------|
-| `rainbow_convert.py` | Main pipeline (4-pass batched processing) |
+| `rainbow_convert.py` | Main pipeline (5-pass pipelined processing via Gemini + BiRefNet) |
 | `server.py` | HTTP server with API endpoints for progress/rerun/stop |
 | `ratings.json` | Per-image adjustment weights |
 | `compare.html` | Visual comparison & rating tool |
@@ -95,4 +98,5 @@ The interactive compare page (`http://localhost:8787/compare.html`) provides:
 
 - Python 3.10+
 - macOS (uses `open` command for browser, `osascript` for notifications)
-- ~2GB disk for AI models (BiRefNet + EDSR, downloaded on first run to `~/.u2net/`)
+- GCP service account (`service_account.json`) for Gemini API access
+- ~1GB disk for BiRefNet model (downloaded on first run to `~/.u2net/`)
