@@ -23,6 +23,6 @@ run_info.json
 # AI models (downloaded on first run)
 *.onnx
 
-# Intermediate step folders (large, reproducible)
-step1_upscaled/
-step2_nobg/
+# Intermediate step folders at top level (large, reproducible)
+/step1_upscaled/
+/step2_nobg/
