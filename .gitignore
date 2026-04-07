@@ -5,10 +5,15 @@ __pycache__/
 # macOS
 .DS_Store
 
+# Credentials
+.env
+service_account.json
+
 # Server
 .server.pid
 pipeline.log
 progress.json
+progress_log.json
 prev_ratings.json
 run_info.json
 
@@ -22,10 +27,6 @@ run_info.json
 260326_*/
 260327_*/
 
-# Generated step folders (reproducible)
+# Intermediate step folders (large, reproducible)
 step1_upscaled/
 step2_nobg/
-step3_bw/
-step4_rainbow/
-baseline_bw/
-baseline_rainbow/

@@ -13,6 +13,38 @@ h1{text-align:center;margin-bottom:5px}
 .progress-bar{height:100%;background:linear-gradient(90deg,#4ecca3,#e94560);border-radius:4px;transition:width .3s}
 .progress-text{font-size:11px;color:#aaa;display:flex;justify-content:space-between}
 .progress-pass{color:#4ecca3;font-weight:bold}
+.progress-toggle{font-size:10px;color:#888;cursor:pointer;text-align:center;margin-top:4px;user-select:none}
+.progress-toggle:hover{color:#ccc}
+.progress-details{display:none;margin-top:8px;border-top:1px solid #333;padding-top:8px}
+.progress-details.open{display:block}
+.pd-pass{margin-bottom:8px}
+.pd-pass-header{display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:3px;cursor:pointer;user-select:none}
+.pd-pass-header:hover{color:#fff}
+.pd-arrow{font-size:8px;color:#888;transition:transform .2s;display:inline-block;width:10px}
+.pd-arrow.open{transform:rotate(90deg)}
+.pd-pass-name{font-weight:bold;color:#4ecca3}
+.pd-pass-name.active{color:#f0a500}
+.pd-pass-name.pending{color:#555}
+.pd-pass-count{color:#888;font-size:10px}
+.pd-pass-time{color:#555;font-size:9px;margin-left:auto}
+.pd-pass-bar{background:#222;border-radius:3px;height:4px;overflow:hidden;margin:2px 0}
+.pd-pass-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.pd-pass-bar-fill.done{background:#4ecca3}
+.pd-pass-bar-fill.active{background:linear-gradient(90deg,#f0a500,#e94560)}
+.pd-pass-bar-fill.skipped{background:#555}
+.pd-files{display:none;padding:4px 0 4px 18px;font-size:9px;color:#777;max-height:200px;overflow-y:auto}
+.pd-files.open{display:block}
+.pd-file{padding:2px 0;display:flex;gap:8px;align-items:center;border-bottom:1px solid #1a1a2e}
+.pd-file.current{color:#f0a500;font-weight:bold}
+.pd-fname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pd-fstatus{font-size:8px;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.pd-fstatus.done{background:#0a2a1a;color:#4ecca3}
+.pd-fstatus.processing{background:#2a2a0a;color:#f0a500}
+.pd-fstatus.skipped{background:#1a1a1a;color:#555}
+.pd-fstatus.fallback{background:#2a1a0a;color:#f0a500}
+.pd-fstatus.error{background:#2a0a0a;color:#e94560}
+.pd-ftime{color:#555;font-size:8px;flex-shrink:0;min-width:35px;text-align:right}
+.pd-total-time{text-align:center;font-size:10px;color:#555;margin-top:6px}
 
 .controls{display:flex;justify-content:center;gap:10px;margin-bottom:15px;flex-wrap:wrap}
 .controls button{padding:7px 14px;border:1px solid #444;background:#16213e;color:#eee;border-radius:6px;cursor:pointer;font-size:12px}
@@ -66,9 +98,11 @@ h2{margin-top:25px;font-size:16px}
 <div class="progress-container" id="progress-container">
   <div class="progress-text">
     <span>Pass <span class="progress-pass" id="p-pass">-</span>: <span id="p-name">-</span></span>
-    <span><span id="p-cur">0</span>/<span id="p-tot">0</span> — <span id="p-file">-</span></span>
+    <span><span id="p-cur">0</span>/<span id="p-tot">0</span> — <span id="p-file">-</span> <span id="p-elapsed" style="color:#555"></span></span>
   </div>
   <div class="progress-bar-wrap"><div class="progress-bar" id="p-bar" style="width:0%"></div></div>
+  <div class="progress-toggle" id="p-toggle" onclick="toggleDetails()">&#9660; Details</div>
+  <div class="progress-details" id="p-details"></div>
 </div>
 
 <div class="controls">
@@ -77,7 +111,9 @@ h2{margin-top:25px;font-size:16px}
 <button onclick="exportJSON()">Export JSON</button>
 <button onclick="importJSON()">Import</button>
 <button onclick="copyJSON()">Copy JSON</button>
-<button class="btn-rerun" onclick="rerun()">Rerun with New Weights</button>
+<button class="btn-rerun" onclick="rerun()">Rerun Changed</button>
+<button class="btn-rerun" onclick="regenerate()">Regenerate All</button>
+<button class="btn-rerun" onclick="regenFrom()">Regen from Pass...</button>
 <button class="btn-stop" onclick="endAll()">End All</button>
 <span style="color:#888;font-size:11px;padding-top:8px" id="stats"></span>
 </div>
@@ -171,43 +207,82 @@ var progressTimer=null;
 function startProgressPoll(){
   document.getElementById("progress-container").classList.add("active");
   progressTimer=setInterval(function(){
-    fetch("/api/progress").then(function(r){return r.json();}).then(function(d){
+    Promise.all([
+      fetch("/api/progress").then(function(r){return r.json();}),
+      fetch("/api/progress_log").then(function(r){return r.json();}).catch(function(){return {};})
+    ]).then(function(results){
+      var d=results[0], log=results[1];
+      updateDetails(d, log);
       if(d.done){
         clearInterval(progressTimer);progressTimer=null;
         document.getElementById("p-pass").textContent="Done";
         document.getElementById("p-name").textContent="Complete!";
         document.getElementById("p-bar").style.width="100%";
         document.getElementById("p-file").textContent="";
+        detailsBuilt=false;
         setTimeout(function(){
           document.getElementById("progress-container").classList.remove("active");
           location.reload();
         },2000);
         return;
       }
-      var totalPasses=4;
-      var passProgress=(d.current/Math.max(d.total,1))*100;
-      var overallProgress=((d.pass-1)/totalPasses)*100+(passProgress/totalPasses);
-      document.getElementById("p-pass").textContent=d.pass+"/4";
+      // Compute overall progress from detailed log (accounts for pipeline parallelism)
+      var passes=log.passes||{};
+      var totalWork=0,doneWork=0;
+      var activePasses=[];
+      PASS_ORDER.forEach(function(pk){
+        var info=passes[pk];
+        if(!info)return;
+        if(info.skipped)return;
+        var fkeys=Object.keys(info.files||{});
+        totalWork+=info.total||0;
+        doneWork+=fkeys.filter(function(k){return info.files[k].status!=="processing";}).length;
+        if(!info.done&&fkeys.length>0)activePasses.push("P"+pk);
+      });
+      var overallProgress=totalWork>0?(doneWork/totalWork*100):0;
+      var passLabel=activePasses.length>0?activePasses.join("+"):"P"+d.pass;
+      document.getElementById("p-pass").textContent=passLabel;
       document.getElementById("p-name").textContent=d.pass_name;
-      document.getElementById("p-cur").textContent=d.current;
-      document.getElementById("p-tot").textContent=d.total;
+      document.getElementById("p-cur").textContent=doneWork;
+      document.getElementById("p-tot").textContent=totalWork;
       document.getElementById("p-file").textContent=d.filename;
       document.getElementById("p-bar").style.width=overallProgress+"%";
+      if(log._elapsed)document.getElementById("p-elapsed").textContent="["+fmtTime(log._elapsed)+"]";
     }).catch(function(){});
   },2000);
 }
 
-// Rerun
+// Rerun (only changed weights)
 function rerun(){
-  if(!confirm("Save current weights and re-run pipeline?"))return;
-  var data=JSON.stringify(ged(),null,2);
-  fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:data})
+  if(!confirm("Save weights and re-run only changed images?"))return;
+  var payload=JSON.stringify({ratings:ged()});
+  fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
-    .then(function(d){
-      if(d.status==="started"){
-        startProgressPoll();
-      }
-    })
+    .then(function(d){if(d.status==="started")startProgressPoll();})
+    .catch(function(e){alert("Error: "+e);});
+}
+
+// Regenerate all images from scratch
+function regenerate(){
+  if(!confirm("Regenerate ALL images from scratch? This will re-run every pass."))return;
+  var payload=JSON.stringify({ratings:ged(),regenerate:true});
+  fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
+    .then(function(r){return r.json();})
+    .then(function(d){if(d.status==="started")startProgressPoll();})
+    .catch(function(e){alert("Error: "+e);});
+}
+
+// Regenerate from a specific pass (reuse earlier outputs)
+function regenFrom(){
+  var pass=prompt("Regenerate from which pass?\\n\\n1 = Upscale (Gemini)\\n1.5 = Canvas extend (Gemini)\\n2 = Background removal\\n3 = B&W conversion\\n4 = Rainbow composite","3");
+  if(!pass)return;
+  var p=parseFloat(pass);
+  if(isNaN(p)||p<1||p>4){alert("Invalid pass number");return;}
+  if(!confirm("Regenerate all images from pass "+p+"?"))return;
+  var payload=JSON.stringify({ratings:ged(),regenerate:true,regen_from:p});
+  fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
+    .then(function(r){return r.json();})
+    .then(function(d){if(d.status==="started")startProgressPoll();})
     .catch(function(e){alert("Error: "+e);});
 }
 
@@ -217,6 +292,138 @@ function endAll(){
   fetch("/api/stop",{method:"POST"})
     .then(function(){window.close();})
     .catch(function(){window.close();});
+}
+
+// Accordion details
+var PASS_ORDER=["1","1.5","2","3","4"];
+var PASS_NAMES={"1":"Upscale/Copy","1.5":"Canvas Extend","2":"BG Remove","3":"B&W","4":"Rainbow"};
+var detailsOpen=false;
+var openPasses={};
+var detailsBuilt=false;
+
+function toggleDetails(){
+  detailsOpen=!detailsOpen;
+  var d=document.getElementById("p-details");
+  var t=document.getElementById("p-toggle");
+  d.classList.toggle("open",detailsOpen);
+  t.innerHTML=detailsOpen?"&#9650; Hide details":"&#9660; Details";
+}
+
+function togglePassFiles(pk){
+  openPasses[pk]=!openPasses[pk];
+  var sk=pk.replace(".","_");
+  var el=document.getElementById("pd-files-"+sk);
+  var ar=document.getElementById("pd-arrow-"+sk);
+  if(el)el.classList.toggle("open",openPasses[pk]);
+  if(ar)ar.classList.toggle("open",openPasses[pk]);
+}
+
+function fmtTime(s){
+  if(!s&&s!==0)return"";
+  if(s<60)return Math.round(s)+"s";
+  var m=Math.floor(s/60),r=Math.round(s%60);
+  return m+"m"+("0"+r).slice(-2)+"s";
+}
+
+function buildDetailsOnce(){
+  if(detailsBuilt)return;
+  detailsBuilt=true;
+  var container=document.getElementById("p-details");
+  var html="";
+  PASS_ORDER.forEach(function(pk){
+    var sk=pk.replace(".","_");
+    var pn=PASS_NAMES[pk]||("Pass "+pk);
+    html+='<div class="pd-pass" id="pd-pass-'+sk+'">';
+    html+='<div class="pd-pass-header" onclick="togglePassFiles(\''+pk+'\')">';
+    html+='<span class="pd-arrow" id="pd-arrow-'+sk+'">&#9654;</span>';
+    html+='<span class="pd-pass-name pending" id="pd-name-'+sk+'">Pass '+pk+': '+pn+'</span>';
+    html+='<span class="pd-pass-count" id="pd-count-'+sk+'"></span>';
+    html+='<span class="pd-pass-time" id="pd-time-'+sk+'"></span>';
+    html+='</div>';
+    html+='<div class="pd-pass-bar"><div class="pd-pass-bar-fill" id="pd-bar-'+sk+'" style="width:0%"></div></div>';
+    html+='<div class="pd-files" id="pd-files-'+sk+'"></div>';
+    html+='</div>';
+  });
+  html+='<div class="pd-total-time" id="pd-total-time"></div>';
+  container.innerHTML=html;
+}
+
+function updateDetails(progress, log){
+  var container=document.getElementById("p-details");
+  if(!container)return;
+  buildDetailsOnce();
+  var curPass=progress.pass;
+  var passes=log.passes||{};
+
+  PASS_ORDER.forEach(function(pk){
+    var sk=pk.replace(".","_");
+    var info=passes[pk];
+    var pn=info?info.name:PASS_NAMES[pk]||("Pass "+pk);
+    var total=info?info.total:0;
+    var filesObj=info?info.files:{};
+    var fileKeys=Object.keys(filesObj);
+    var count=fileKeys.length;
+    var doneCount=fileKeys.filter(function(k){return filesObj[k].status!=="processing";}).length;
+    var passNum=parseFloat(pk);
+    var isDone=(info&&info.done)||false;
+    var isSkipped=(info&&info.skipped)||false;
+    var isActive=!progress.done&&!isDone&&!isSkipped&&count>0;
+    var isPending=!isDone&&!isActive;
+    var pct=total>0?(doneCount/total*100):0;
+    if(isDone)pct=100;
+
+    // Update name
+    var nameEl=document.getElementById("pd-name-"+sk);
+    var nameClass=isPending?"pending":isActive?"active":"";
+    if(isSkipped)nameClass="pending";
+    nameEl.className="pd-pass-name "+nameClass;
+    var prefix=isDone?(isSkipped?"\u23ED ":"\u2713 "):"";
+    nameEl.textContent=prefix+"Pass "+pk+": "+pn;
+
+    // Update count
+    var countEl=document.getElementById("pd-count-"+sk);
+    if(total>0)countEl.textContent=doneCount+"/"+total;
+    else if(isSkipped)countEl.textContent="skipped";
+    else if(isDone)countEl.textContent="\u2713";
+    else countEl.textContent="";
+
+    // Update time
+    var timeEl=document.getElementById("pd-time-"+sk);
+    if(info&&info.elapsed>0)timeEl.textContent=fmtTime(info.elapsed);
+    else timeEl.textContent="";
+
+    // Update bar
+    var barEl=document.getElementById("pd-bar-"+sk);
+    barEl.style.width=pct+"%";
+    barEl.className="pd-pass-bar-fill "+(isSkipped?"skipped":isDone?"done":isActive?"active":"");
+
+    // Update file list (only rebuild if count changed or active pass)
+    var filesEl=document.getElementById("pd-files-"+sk);
+    if(filesEl.childElementCount!==count||(count>0&&isActive)){
+      var fhtml="";
+      fileKeys.forEach(function(fn){
+        var fi=filesObj[fn];
+        var isCur=isActive&&fi.status==="processing";
+        var statusCls=fi.status||"processing";
+        fhtml+='<div class="pd-file'+(isCur?" current":"")+'">';
+        fhtml+='<span class="pd-fname">'+fn+'</span>';
+        fhtml+='<span class="pd-fstatus '+statusCls+'">'+fi.status+'</span>';
+        if(fi.elapsed>0)fhtml+='<span class="pd-ftime">'+fmtTime(fi.elapsed)+'</span>';
+        else fhtml+='<span class="pd-ftime"></span>';
+        fhtml+='</div>';
+      });
+      if(count===0&&isActive&&progress.filename){
+        fhtml='<div class="pd-file current"><span class="pd-fname">'+progress.filename+'</span><span class="pd-fstatus processing">processing</span><span class="pd-ftime"></span></div>';
+      }
+      filesEl.innerHTML=fhtml;
+    }
+  });
+
+  // Total elapsed
+  var totalEl=document.getElementById("pd-total-time");
+  if(totalEl&&log._elapsed){
+    totalEl.textContent="Total: "+fmtTime(log._elapsed);
+  }
 }
 
 // Check if pipeline is running on load

@@ -37,21 +37,48 @@ class PipelineHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(jmod.dumps(files).encode())
         elif self.path == "/api/ratings":
             self.send_json_file(BASE / "ratings.json")
+        elif self.path == "/api/progress_log":
+            self.send_json_file(BASE / "progress_log.json")
         else:
             super().do_GET()
 
     def do_POST(self):
-        if self.path == "/api/rerun":
+        if self.path in ("/api/rerun", "/api/regenerate"):
             content_len = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_len).decode()
-            # Save ratings
+
+            # Parse body as JSON — may include ratings + options
+            import json as jmod
+            try:
+                data = jmod.loads(body)
+            except Exception:
+                data = {}
+
+            # Save ratings if provided
+            ratings_data = data.get("ratings", data)
+            if ratings_data and isinstance(ratings_data, dict) and not data.get("regen_from"):
+                # It's just ratings (old format) or has a ratings key
+                pass
+            if "ratings" in data:
+                ratings_data = data["ratings"]
             ratings_path = BASE / "ratings.json"
-            ratings_path.write_text(body)
+            if ratings_data and isinstance(next(iter(ratings_data.values()), None), dict):
+                ratings_path.write_text(jmod.dumps(ratings_data, indent=2))
+
             # Clear progress
             (BASE / "progress.json").write_text('{"done":false,"pass":0,"pass_name":"Starting...","current":0,"total":0,"filename":""}')
+            (BASE / "progress_log.json").write_text('{}')
+
+            # Build command
+            cmd = [sys.executable, str(BASE / "rainbow_convert.py")]
+            if self.path == "/api/regenerate" or data.get("regenerate"):
+                cmd.append("--regenerate")
+            if data.get("regen_from"):
+                cmd.extend(["--regen-from", str(data["regen_from"])])
+
             # Run pipeline in background
             subprocess.Popen(
-                [sys.executable, str(BASE / "rainbow_convert.py")],
+                cmd,
                 cwd=str(BASE),
                 stdout=open(BASE / "pipeline.log", "w"),
                 stderr=subprocess.STDOUT,

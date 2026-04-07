@@ -7,13 +7,12 @@ pip3 install --break-system-packages \
   Pillow \
   rembg \
   onnxruntime \
-  super-image \
   opencv-python-headless \
   scikit-image \
   numpy \
   scipy \
-  torch \
-  torchvision
+  google-genai \
+  google-auth
 
 echo ""
 echo "=== Installation complete ==="
