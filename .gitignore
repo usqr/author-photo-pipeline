@@ -23,10 +23,6 @@ run_info.json
 # AI models (downloaded on first run)
 *.onnx
 
-# Run archives (generated, reproducible from source + ratings)
-260326_*/
-260327_*/
-
 # Intermediate step folders (large, reproducible)
 step1_upscaled/
 step2_nobg/
