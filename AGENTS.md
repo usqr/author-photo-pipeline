@@ -4,27 +4,28 @@
 Converts author portrait photos into stylized B&W images on rainbow gradient backgrounds, matching a hand-crafted reference style (see `rainbow_Gokce.jpg`).
 
 ## Pipeline Steps
-1. **AI Upscale (Pass 1)** — Gemini Flash Image API. Enhances and upscales all portrait photos. Falls back to copying originals if no `service_account.json`.
-2. **Canvas Extend (Pass 1.5)** — Gemini Flash Image API. Extends canvas ~15% on each side, generating natural continuation of body/hair/clothing/background.
-3. **Background Removal (Pass 2)** — BiRefNet portrait model via `rembg` with alpha matting for clean hair/edge separation. Parameters: foreground threshold 230, background threshold 20, erode size 6.
-4. **B&W Conversion (Pass 3)** — Gemini converts to high-contrast B&W matching reference style. Falls back to local histogram matching (CDF-matched to `bw.png`). Then per-image adjustments from `ratings.json`: shadow/highlight curves, brightness, contrast, sharpness.
-5. **Rainbow Composite (Pass 4)** — Center-crop to square, scale `rainbow.png` gradient to match image size (no downscaling), alpha composite.
+1. **AI Upscale (Pass 1)** — Gemini Flash Image API ("Nano Banana"). Enhances and upscales all portrait photos. Falls back to copying originals if no `service_account.json`.
+2. **Green Background (Pass 1.25)** — BiRefNet portrait model via `rembg` detects person, then composites over standard chroma green (0,177,64). Prepares image for green screen keying in Pass 2.
+3. **Canvas Extend (Pass 1.5)** — Gemini Flash Image API. Extends canvas ~15% on each side, continuing the person's body/hair/clothing seamlessly while keeping the green background solid.
+4. **Green Screen Keying (Pass 2)** — CorridorKey neural network keyer (`github.com/nikopueringer/CorridorKey`). Uses Hiera backbone with CNN refinement for high-fidelity color unmixing — preserves hair detail, motion blur, and semi-transparent edges. Generates coarse alpha hint from chroma threshold, then produces clean straight foreground + linear alpha. Includes despill (green cast removal) and despeckle (matte cleanup).
+5. **B&W Conversion (Pass 3)** — Gemini converts to high-contrast B&W matching reference style. Falls back to local histogram matching (CDF-matched to `bw.png`). Then per-image adjustments from `ratings.json`: shadow/highlight curves, brightness, contrast, sharpness.
+6. **Rainbow Composite (Pass 4)** — Center-crop to square, scale `rainbow.png` gradient to match image size (no downscaling), alpha composite.
 
 ## Architecture
-Pipeline runs **5 passes concurrently in a threaded pipeline** — each pass is a worker thread connected by queues:
+Pipeline runs **6 passes concurrently in a threaded pipeline** — each pass is a worker thread connected by queues:
 
 ```
-files → [P1: Gemini Upscale] → q1 → [P1.5: Gemini Extend] → q15 → [P2: BiRefNet BG] → q2 → [P3: Gemini B&W] → q3 → [P4: Rainbow]
+files → [P1: Gemini Upscale] → q1 → [P1.25: Green BG] → q125 → [P1.5: Gemini Extend] → q15 → [P2: CorridorKey] → q2 → [P3: Gemini B&W] → q3 → [P4: Rainbow]
 ```
 
-As soon as P1 finishes one image, P1.5 starts on it while P1 works on the next. This overlaps Gemini API I/O waits with BiRefNet GPU work. Thread safety via `RLock` for progress and `Lock` for printing. Each worker has `try/finally` with sentinel propagation so downstream workers never hang on errors.
+As soon as P1 finishes one image, P1.25 can start on it while P1 works on the next. This overlaps Gemini API I/O waits with BiRefNet/CorridorKey GPU work. Thread safety via `RLock` for progress and `Lock` for printing. Each worker has `try/finally` with sentinel propagation so downstream workers never hang on errors.
 
 Progress reported to `progress.json` (top-level) and `progress_log.json` (per-pass/per-file detail with timing and status) for the compare page to poll.
 
 ## Key Files
 | File | Description |
 |------|-------------|
-| `rainbow_convert.py` | Main pipeline — 5-pass pipelined processing (Gemini + BiRefNet) |
+| `rainbow_convert.py` | Main pipeline — 6-pass pipelined processing (Gemini + BiRefNet + CorridorKey) |
 | `server.py` | HTTP server with API endpoints (`/api/progress`, `/api/progress_log`, `/api/rerun`, `/api/stop`, `/api/run_info`, `/api/files`, `/api/ratings`) |
 | `ratings.json` | Per-image adjustments from compare.html sliders |
 | `compare.html` | Visual comparison tool — 3-way (new/prev/baseline), sliders with ghost markers, progress bar, rerun/stop buttons |
@@ -69,7 +70,8 @@ Ratings in `ratings.json` control per-image B&W adjustments. Set via compare.htm
 
 ## Environment
 - **Python 3.10+** (tested on 3.14)
-- **Key packages**: Pillow, rembg, google-genai, scikit-image, opencv-python-headless
+- **Key packages**: Pillow, rembg, google-genai, scikit-image, opencv-python-headless, torch, torchvision, timm
 - **GCP**: requires `service_account.json` for Gemini API (project: `gemini-image-generation-492101`, model: `gemini-2.5-flash-image`)
+- **CorridorKey**: cloned to `CorridorKey/` subdir, model (~300MB) auto-downloads from HuggingFace on first run
 - **macOS**: uses `open` command and `osascript` notification
-- **AI models** (~1GB): BiRefNet downloaded to `~/.u2net/` on first run
+- **AI models**: BiRefNet (~1GB) downloaded to `~/.u2net/` on first run; CorridorKey (~300MB) to `CorridorKey/CorridorKeyModule/checkpoints/`

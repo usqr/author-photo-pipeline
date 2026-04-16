@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Multi-step author photo pipeline (v5) — memory-safe batched processing.
+Multi-step author photo pipeline (v6) — memory-safe batched processing.
 Runs each step as a separate pass to avoid OOM from loading all models at once.
 
-  Pass 1: AI upscale (EDSR) → step1_upscaled/
-  Pass 2: Background removal (BiRefNet portrait) → step2_nobg/
-  Pass 3: B&W conversion (histogram-matched + per-image ratings) → step3_bw/
-  Pass 4: Rainbow composite → step4_rainbow/
+  Pass 1:    AI upscale (Gemini Nano Banana) → step1_upscaled/
+  Pass 1.25: Green background substitution (BiRefNet) → step1_upscaled/ (in-place)
+  Pass 1.5:  Canvas extension (Gemini) → step1_upscaled/ (in-place)
+  Pass 2:    Green screen keying (CorridorKey) → step2_nobg/
+  Pass 3:    B&W conversion (Gemini + per-image ratings) → step3_bw/
+  Pass 4:    Rainbow composite → step4_rainbow/
 
 Reads ratings.json for per-image adjustments.
 """
@@ -39,6 +41,8 @@ STEP1_DIR = BASE_DIR / "step1_upscaled"
 STEP2_DIR = BASE_DIR / "step2_nobg"
 STEP3_DIR = BASE_DIR / "step3_bw"
 STEP4_DIR = BASE_DIR / "step4_rainbow"
+CORRIDORKEY_DIR = BASE_DIR / "CorridorKey"
+CHROMA_GREEN = (0, 177, 64)  # Standard broadcast chroma green
 
 TARGET_SIZE = 280
 AI_UPSCALE_THRESHOLD = 500
@@ -353,10 +357,10 @@ def apply_rating_adjustments(gray_pil, a_np, ratings, fname):
 # ── Pipelined execution ─────────────────────────────────────────────────────
 #
 # Each pass runs in its own thread. Images flow through queues:
-#   files → [P1] → q1 → [P1.5] → q15 → [P2] → q2 → [P3] → q3 → [P4] → done
+#   files → [P1] → q1 → [P1.25] → q125 → [P1.5] → q15 → [P2] → q2 → [P3] → q3 → [P4] → done
 #
-# As soon as P1 finishes one image, P1.5 can start on it while P1 works on the
-# next image. This overlaps Gemini API waits with BiRefNet GPU work.
+# As soon as P1 finishes one image, P1.25 can start on it while P1 works on the
+# next image. This overlaps Gemini API waits with BiRefNet/CorridorKey GPU work.
 
 _SENTINEL = None  # signals "no more items" on a queue
 
@@ -364,11 +368,16 @@ _SENTINEL = None  # signals "no more items" on a queue
 def run_pipeline(files, ratings, regen_from):
     """Run all passes concurrently in a pipelined fashion."""
     total = len(files)
-    q1 = Queue()     # P1 → P1.5
+    q1 = Queue()     # P1 → P1.25
+    q125 = Queue()   # P1.25 → P1.5
     q15 = Queue()    # P1.5 → P2
     q2 = Queue()     # P2 → P3
     q3 = Queue()     # P3 → P4
     errors = []      # collect worker errors
+    # Shared list for GPU resources that must be cleaned up from the main
+    # thread after join() — avoids PyTorch thread-local destructor crash
+    # when the GIL is acquired during thread exit.
+    _deferred_cleanup = []
 
     # ── Pass 1: Upscale (Gemini) ──
 
@@ -428,6 +437,71 @@ def run_pipeline(files, ratings, regen_from):
         finally:
             q1.put(_SENTINEL)
 
+    # ── Pass 1.25: Green Background Substitution (BiRefNet) ──
+
+    def worker_pass125():
+        try:
+            if regen_from > 1.25:
+                _mark_pass_skipped(1.25, "Green BG")
+                _log("PASS 1.25: Skipped (reusing step1 output)")
+                while True:
+                    f = q1.get()
+                    if f is _SENTINEL:
+                        break
+                    q125.put(f)
+                return
+
+            from rembg import remove, new_session
+            _log("P1.25: Loading BiRefNet for green BG substitution...")
+            session = new_session("birefnet-portrait")
+            _log("P1.25: BiRefNet loaded")
+
+            i = 0
+            while True:
+                f = q1.get()
+                if f is _SENTINEL:
+                    break
+                i += 1
+                fname = f.name
+                s1_path = STEP1_DIR / fname
+                if not s1_path.exists():
+                    write_progress(1.25, "Green BG", i, total, fname, "skipped")
+                    write_progress_file_done(1.25, fname, "skipped")
+                    q125.put(f)
+                    continue
+
+                write_progress(1.25, "Green BG", i, total, fname)
+                img = Image.open(s1_path).convert("RGBA")
+
+                # Use BiRefNet to get person mask
+                img_no_bg = remove(
+                    img, session=session, alpha_matting=True,
+                    alpha_matting_foreground_threshold=230,
+                    alpha_matting_background_threshold=20,
+                    alpha_matting_erode_size=6,
+                )
+                _, _, _, alpha = img_no_bg.split()
+
+                # Composite person over chroma green background
+                green_bg = Image.new("RGBA", img.size, CHROMA_GREEN + (255,))
+                person = img.copy()
+                person.putalpha(alpha)
+                result = Image.alpha_composite(green_bg, person)
+
+                save_img(result, s1_path)  # Overwrite step1 in-place
+                _log(f"[P1.25 {i}/{total}] {fname}: green BG applied")
+                write_progress_file_done(1.25, fname)
+                q125.put(f)
+
+            del session
+            write_progress_pass_done(1.25)
+            _log("P1.25: Done, BiRefNet unloaded")
+        except Exception as e:
+            errors.append(("P1.25", e))
+            _log(f"P1.25 ERROR: {e}")
+        finally:
+            q125.put(_SENTINEL)
+
     # ── Pass 1.5: Canvas Extend (Gemini) ──
 
     def worker_pass15():
@@ -436,7 +510,7 @@ def run_pipeline(files, ratings, regen_from):
                 _mark_pass_skipped(1.5, "Canvas Extend")
                 _log("PASS 1.5: Skipped (reusing step1 output)")
                 while True:
-                    f = q1.get()
+                    f = q125.get()
                     if f is _SENTINEL:
                         break
                     q15.put(f)
@@ -446,7 +520,7 @@ def run_pipeline(files, ratings, regen_from):
                 _mark_pass_skipped(1.5, "Canvas Extend")
                 _log("PASS 1.5: No service_account.json — skipping")
                 while True:
-                    f = q1.get()
+                    f = q125.get()
                     if f is _SENTINEL:
                         break
                     q15.put(f)
@@ -456,17 +530,18 @@ def run_pipeline(files, ratings, regen_from):
             _log("P1.5: Gemini canvas extension connected")
 
             extend_prompt = (
-                "Take this portrait photo and extend the canvas outward by about 15% "
-                "on every side (left, right, top, bottom). Generate the missing content "
-                "naturally — continue the person's body, hair, clothing, and background "
-                "seamlessly beyond the original edges. The original photo should remain "
-                "in the center, completely unchanged. Keep the person EXACTLY the same. "
-                "Output only the extended photo."
+                "Take this portrait photo on a green screen background and extend the "
+                "canvas outward by about 15% on every side (left, right, top, bottom). "
+                "Generate the missing content naturally — continue the person's body, "
+                "hair, clothing seamlessly beyond the original edges. The background "
+                "MUST remain the same solid green color throughout. The original photo "
+                "should remain in the center, completely unchanged. Keep the person "
+                "EXACTLY the same. Output only the extended photo."
             )
 
             i = 0
             while True:
-                f = q1.get()
+                f = q125.get()
                 if f is _SENTINEL:
                     break
                 i += 1
@@ -505,12 +580,12 @@ def run_pipeline(files, ratings, regen_from):
         finally:
             q15.put(_SENTINEL)
 
-    # ── Pass 2: Background Removal (BiRefNet) ──
+    # ── Pass 2: Green Screen Keying (CorridorKey) ──
 
     def worker_pass2():
         try:
             if regen_from > 2:
-                _mark_pass_skipped(2, "BG Remove")
+                _mark_pass_skipped(2, "Key")
                 _log("PASS 2: Skipped (reusing step2 output)")
                 while True:
                     f = q15.get()
@@ -519,10 +594,34 @@ def run_pipeline(files, ratings, regen_from):
                     q2.put(f)
                 return
 
-            from rembg import remove, new_session
-            _log("P2: Loading BiRefNet portrait model...")
-            session = new_session("birefnet-portrait")
-            _log("P2: BiRefNet loaded")
+            import sys as _sys
+            ck_path = str(CORRIDORKEY_DIR)
+            if ck_path not in _sys.path:
+                _sys.path.insert(0, ck_path)
+
+            from CorridorKeyModule.inference_engine import CorridorKeyEngine
+            import torch
+
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+
+            checkpoint = CORRIDORKEY_DIR / "CorridorKeyModule" / "checkpoints" / "CorridorKey.pth"
+            if not checkpoint.exists():
+                raise FileNotFoundError(f"CorridorKey checkpoint not found: {checkpoint}")
+            # img_size=512 for MPS/CPU feasibility; mixed_precision=False for MPS compat
+            ck_img_size = 2048 if device == "cuda" else 512
+            _log(f"P2: Loading CorridorKey engine (device={device}, img_size={ck_img_size})...")
+            engine = CorridorKeyEngine(
+                checkpoint_path=str(checkpoint),
+                device=device,
+                img_size=ck_img_size,
+                mixed_precision=(device == "cuda"),
+            )
+            _log("P2: CorridorKey loaded")
 
             i = 0
             while True:
@@ -535,27 +634,51 @@ def run_pipeline(files, ratings, regen_from):
                 s1_path = STEP1_DIR / fname
                 if not s1_path.exists():
                     _log(f"[P2 {i}/{total}] {fname}: skip (no step1)")
-                    write_progress(2, "BG Remove", i, total, fname, "skipped")
+                    write_progress(2, "Key (CorridorKey)", i, total, fname, "skipped")
                     write_progress_file_done(2, fname, "skipped")
                     q2.put(f)
                     continue
 
-                write_progress(2, "BG Remove", i, total, fname)
-                img = Image.open(s1_path).convert("RGBA")
-                img_no_bg = remove(
-                    img, session=session, alpha_matting=True,
-                    alpha_matting_foreground_threshold=230,
-                    alpha_matting_background_threshold=20,
-                    alpha_matting_erode_size=6,
+                write_progress(2, "Key (CorridorKey)", i, total, fname)
+
+                # Load green-screen image
+                img_pil = Image.open(s1_path).convert("RGB")
+                img_np = np.array(img_pil).astype(np.float32) / 255.0
+
+                # Generate coarse alpha hint from chroma (green = BG)
+                r, g, b = img_np[:, :, 0], img_np[:, :, 1], img_np[:, :, 2]
+                green_excess = g - np.maximum(r, b)
+                mask = (green_excess < 0.1).astype(np.float32)
+
+                # CorridorKey green screen keying
+                ck_result = engine.process_frame(
+                    image=img_np,
+                    mask_linear=mask,
+                    input_is_linear=False,
+                    despill_strength=1.0,
+                    auto_despeckle=True,
+                    despeckle_size=400,
+                    generate_comp=False,
+                    post_process_on_gpu=(device != "cpu"),
                 )
-                img_no_bg.save(STEP2_DIR / (stem + ".png"), "PNG")
-                _log(f"[P2 {i}/{total}] {fname}: done")
+
+                # Combine straight foreground + alpha into RGBA
+                fg = ck_result["fg"]        # [H, W, 3] float32 sRGB straight
+                alpha = ck_result["alpha"]  # [H, W, 1] float32 linear
+                rgba = np.concatenate([fg, alpha], axis=2)
+                rgba_u8 = np.clip(rgba * 255, 0, 255).astype(np.uint8)
+                img_out = Image.fromarray(rgba_u8, "RGBA")
+
+                img_out.save(STEP2_DIR / (stem + ".png"), "PNG")
+                _log(f"[P2 {i}/{total}] {fname}: done (CorridorKey)")
                 write_progress_file_done(2, fname)
                 q2.put(f)
 
-            del session
+            # Defer engine cleanup to main thread — PyTorch's thread-local
+            # destructors crash (SIGSEGV in take_gil) during worker thread exit.
+            _deferred_cleanup.append(engine)
             write_progress_pass_done(2)
-            _log("P2: Done, BiRefNet unloaded")
+            _log("P2: Done")
         except Exception as e:
             errors.append(("P2", e))
             _log(f"P2 ERROR: {e}")
@@ -709,12 +832,13 @@ def run_pipeline(files, ratings, regen_from):
     # ── Launch pipeline ──
 
     _log("=" * 60)
-    _log("PIPELINE: 5 stages running concurrently")
-    _log("  P1:Upscale → P1.5:Extend → P2:BG Remove → P3:B&W → P4:Rainbow")
+    _log("PIPELINE: 6 stages running concurrently")
+    _log("  P1:Upscale → P1.25:Green BG → P1.5:Extend → P2:Key → P3:B&W → P4:Rainbow")
     _log("=" * 60)
 
     threads = [
         threading.Thread(target=worker_pass1, name="P1"),
+        threading.Thread(target=worker_pass125, name="P1.25"),
         threading.Thread(target=worker_pass15, name="P1.5"),
         threading.Thread(target=worker_pass2, name="P2"),
         threading.Thread(target=worker_pass3, name="P3"),
@@ -724,6 +848,12 @@ def run_pipeline(files, ratings, regen_from):
         t.start()
     for t in threads:
         t.join()
+
+    # Clean up GPU resources from the main thread (safe GIL state)
+    for obj in _deferred_cleanup:
+        del obj
+    _deferred_cleanup.clear()
+    import gc; gc.collect()
 
     if errors:
         _log(f"\nPipeline finished with {len(errors)} error(s):")

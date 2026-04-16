@@ -15,8 +15,8 @@
     "contrast": 20,
     "light_areas": -40,
     "sharpness": 80,
-    "pixelization": 20,
-    "detail": 60
+    "pixelization": 10,
+    "detail": 80
   },
   "Dan Wilson-green-sweater - w1200 h1200 - colored background - CK Purple.webp": {
     "lightness": 20,
@@ -43,8 +43,8 @@
   "T03UQQ7LL-U03UQRP0C-cdefe8a2504c-512.webp": {
     "contrast": 10,
     "dark_areas": 10,
-    "pixelization": 20,
-    "detail": 10
+    "pixelization": -20,
+    "detail": 40
   },
   "aleksandra.webp": {
     "sharpness": 60,
@@ -52,16 +52,17 @@
     "detail": 90
   },
   "anna.jpg": {
-    "contrast": 20,
+    "dark_areas": -10,
     "sharpness": 10,
+    "pixelization": -30,
     "detail": 100
   },
   "arkadiuszf.jpg": {
     "lightness": 10,
-    "contrast": 50,
+    "contrast": 10,
     "dark_areas": 10,
     "sharpness": 20,
-    "pixelization": 10,
+    "pixelization": -20,
     "detail": 100
   },
   "bartekb.jpg": {
@@ -101,21 +102,24 @@
   },
   "dominika.jpg": {
     "lightness": -20,
-    "contrast": 20,
+    "contrast": 40,
     "dark_areas": -20,
     "light_areas": -20,
     "sharpness": 40,
+    "pixelization": -20,
     "detail": 100
   },
   "eliseb.webp": {
-    "contrast": -10,
-    "dark_areas": 30,
+    "contrast": -20,
+    "dark_areas": 20,
     "sharpness": 20,
+    "pixelization": -40,
     "detail": 100
   },
   "filips-2b4ba2bbe5.webp": {
     "contrast": 20,
     "sharpness": 30,
+    "pixelization": -20,
     "detail": 40
   },
   "filipt.jpg": {
@@ -146,9 +150,10 @@
     "detail": 80
   },
   "lukaszdrobnik.jpg": {
-    "lightness": 10,
+    "lightness": 20,
     "contrast": 10,
-    "sharpness": -40,
+    "light_areas": 20,
+    "sharpness": -30,
     "detail": -20
   },
   "maciej.jpg": {
@@ -177,8 +182,8 @@
   },
   "mrina.webp": {
     "lightness": -20,
-    "contrast": 30,
-    "dark_areas": -20,
+    "contrast": 20,
+    "dark_areas": -40,
     "light_areas": 20,
     "detail": 100
   },
@@ -191,7 +196,6 @@
     "detail": 100
   },
   "pawel.jpg": {
-    "contrast": 10,
     "light_areas": 10,
     "sharpness": 50,
     "pixelization": -70,
@@ -260,7 +264,7 @@
     "contrast": 30,
     "light_areas": -10,
     "sharpness": 50,
-    "pixelization": -60,
+    "pixelization": -50,
     "detail": 100
   },
   "vadims-7ef14c13d8.webp": {
@@ -273,8 +277,10 @@
   "witolds.jpg": {
     "lightness": 10,
     "contrast": -10,
+    "dark_areas": 20,
     "light_areas": -10,
-    "pixelization": -10,
+    "sharpness": 10,
+    "pixelization": -40,
     "detail": 100
   }
 }

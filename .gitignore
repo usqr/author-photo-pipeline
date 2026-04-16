@@ -23,6 +23,9 @@ run_info.json
 # AI models (downloaded on first run)
 *.onnx
 
+# CorridorKey (cloned dependency)
+/CorridorKey/
+
 # Intermediate step folders at top level (large, reproducible)
 /step1_upscaled/
 /step2_nobg/
