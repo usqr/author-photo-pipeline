@@ -365,6 +365,15 @@ def apply_rating_adjustments(gray_pil, a_np, ratings, fname):
 _SENTINEL = None  # signals "no more items" on a queue
 
 
+def _drain(q_in, q_out):
+    """Pass all items from one queue to the next until sentinel."""
+    while True:
+        item = q_in.get()
+        if item is _SENTINEL:
+            break
+        q_out.put(item)
+
+
 def run_pipeline(files, ratings, regen_from):
     """Run all passes concurrently in a pipelined fashion."""
     total = len(files)
@@ -374,10 +383,6 @@ def run_pipeline(files, ratings, regen_from):
     q2 = Queue()     # P2 → P3
     q3 = Queue()     # P3 → P4
     errors = []      # collect worker errors
-    # Shared list for GPU resources that must be cleaned up from the main
-    # thread after join() — avoids PyTorch thread-local destructor crash
-    # when the GIL is acquired during thread exit.
-    _deferred_cleanup = []
 
     # ── Pass 1: Upscale (Gemini) ──
 
@@ -444,11 +449,7 @@ def run_pipeline(files, ratings, regen_from):
             if regen_from > 1.25:
                 _mark_pass_skipped(1.25, "Green BG")
                 _log("PASS 1.25: Skipped (reusing step1 output)")
-                while True:
-                    f = q1.get()
-                    if f is _SENTINEL:
-                        break
-                    q125.put(f)
+                _drain(q1, q125)
                 return
 
             from rembg import remove, new_session
@@ -509,21 +510,13 @@ def run_pipeline(files, ratings, regen_from):
             if regen_from > 1.5:
                 _mark_pass_skipped(1.5, "Canvas Extend")
                 _log("PASS 1.5: Skipped (reusing step1 output)")
-                while True:
-                    f = q125.get()
-                    if f is _SENTINEL:
-                        break
-                    q15.put(f)
+                _drain(q125, q15)
                 return
 
             if not SERVICE_ACCOUNT_PATH.exists():
                 _mark_pass_skipped(1.5, "Canvas Extend")
                 _log("PASS 1.5: No service_account.json — skipping")
-                while True:
-                    f = q125.get()
-                    if f is _SENTINEL:
-                        break
-                    q15.put(f)
+                _drain(q125, q15)
                 return
 
             client = get_gemini_client()
@@ -587,28 +580,17 @@ def run_pipeline(files, ratings, regen_from):
             if regen_from > 2:
                 _mark_pass_skipped(2, "Key")
                 _log("PASS 2: Skipped (reusing step2 output)")
-                while True:
-                    f = q15.get()
-                    if f is _SENTINEL:
-                        break
-                    q2.put(f)
+                _drain(q15, q2)
                 return
 
-            import sys as _sys
             ck_path = str(CORRIDORKEY_DIR)
-            if ck_path not in _sys.path:
-                _sys.path.insert(0, ck_path)
+            if ck_path not in sys.path:
+                sys.path.insert(0, ck_path)
 
             from CorridorKeyModule.inference_engine import CorridorKeyEngine
-            import torch
+            from device_utils import detect_best_device
 
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-
+            device = detect_best_device()
             checkpoint = CORRIDORKEY_DIR / "CorridorKeyModule" / "checkpoints" / "CorridorKey.pth"
             if not checkpoint.exists():
                 raise FileNotFoundError(f"CorridorKey checkpoint not found: {checkpoint}")
@@ -640,17 +622,13 @@ def run_pipeline(files, ratings, regen_from):
                     continue
 
                 write_progress(2, "Key (CorridorKey)", i, total, fname)
-
-                # Load green-screen image
                 img_pil = Image.open(s1_path).convert("RGB")
                 img_np = np.array(img_pil).astype(np.float32) / 255.0
 
-                # Generate coarse alpha hint from chroma (green = BG)
+                # Chroma threshold: foreground where green doesn't dominate
                 r, g, b = img_np[:, :, 0], img_np[:, :, 1], img_np[:, :, 2]
-                green_excess = g - np.maximum(r, b)
-                mask = (green_excess < 0.1).astype(np.float32)
+                mask = (g - np.maximum(r, b) < 0.1).astype(np.float32)
 
-                # CorridorKey green screen keying
                 ck_result = engine.process_frame(
                     image=img_np,
                     mask_linear=mask,
@@ -662,11 +640,9 @@ def run_pipeline(files, ratings, regen_from):
                     post_process_on_gpu=(device != "cpu"),
                 )
 
-                # Combine straight foreground + alpha into RGBA
-                fg = ck_result["fg"]        # [H, W, 3] float32 sRGB straight
-                alpha = ck_result["alpha"]  # [H, W, 1] float32 linear
-                rgba = np.concatenate([fg, alpha], axis=2)
-                rgba_u8 = np.clip(rgba * 255, 0, 255).astype(np.uint8)
+                fg = ck_result["fg"]
+                alpha = ck_result["alpha"]
+                rgba_u8 = np.clip(np.concatenate([fg, alpha], axis=2) * 255, 0, 255).astype(np.uint8)
                 img_out = Image.fromarray(rgba_u8, "RGBA")
 
                 img_out.save(STEP2_DIR / (stem + ".png"), "PNG")
@@ -674,9 +650,7 @@ def run_pipeline(files, ratings, regen_from):
                 write_progress_file_done(2, fname)
                 q2.put(f)
 
-            # Defer engine cleanup to main thread — PyTorch's thread-local
-            # destructors crash (SIGSEGV in take_gil) during worker thread exit.
-            _deferred_cleanup.append(engine)
+            del engine
             write_progress_pass_done(2)
             _log("P2: Done")
         except Exception as e:
@@ -684,6 +658,10 @@ def run_pipeline(files, ratings, regen_from):
             _log(f"P2 ERROR: {e}")
         finally:
             q2.put(_SENTINEL)
+            # Block forever — PyTorch's C++ thread-local destructors crash
+            # (SIGSEGV in take_gil) during pthread_exit. As a daemon thread,
+            # this will be killed cleanly at interpreter shutdown.
+            threading.Event().wait()
 
     # ── Pass 3: B&W Conversion (Gemini + adjustments) ──
 
@@ -692,11 +670,7 @@ def run_pipeline(files, ratings, regen_from):
             if regen_from > 3:
                 _mark_pass_skipped(3, "B&W")
                 _log("PASS 3: Skipped (reusing step3 output)")
-                while True:
-                    f = q2.get()
-                    if f is _SENTINEL:
-                        break
-                    q3.put(f)
+                _drain(q2, q3)
                 return
 
             from google import genai
@@ -836,24 +810,24 @@ def run_pipeline(files, ratings, regen_from):
     _log("  P1:Upscale → P1.25:Green BG → P1.5:Extend → P2:Key → P3:B&W → P4:Rainbow")
     _log("=" * 60)
 
+    p2_thread = threading.Thread(target=worker_pass2, name="P2", daemon=True)
     threads = [
         threading.Thread(target=worker_pass1, name="P1"),
         threading.Thread(target=worker_pass125, name="P1.25"),
         threading.Thread(target=worker_pass15, name="P1.5"),
-        threading.Thread(target=worker_pass2, name="P2"),
+        p2_thread,
         threading.Thread(target=worker_pass3, name="P3"),
         threading.Thread(target=worker_pass4, name="P4"),
     ]
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
-
-    # Clean up GPU resources from the main thread (safe GIL state)
-    for obj in _deferred_cleanup:
-        del obj
-    _deferred_cleanup.clear()
-    import gc; gc.collect()
+        if not t.daemon:
+            t.join()
+    # P2 is a daemon thread that blocks forever after completing its work
+    # to avoid PyTorch's C++ TLS destructor crash. Wait for its sentinel
+    # (already sent to q2) by checking that P3 consumed it.
+    # P3 and P4 are already joined above, so P2's work is guaranteed done.
 
     if errors:
         _log(f"\nPipeline finished with {len(errors)} error(s):")
