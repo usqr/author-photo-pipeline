@@ -17,7 +17,8 @@ pip3 install --break-system-packages \
   torchvision \
   timm \
   tqdm \
-  huggingface_hub
+  huggingface_hub \
+  packaging
 
 echo ""
 

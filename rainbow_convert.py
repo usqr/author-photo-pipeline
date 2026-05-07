@@ -523,13 +523,26 @@ def run_pipeline(files, ratings, regen_from):
             _log("P1.5: Gemini canvas extension connected")
 
             extend_prompt = (
-                "Take this portrait photo on a green screen background and extend the "
-                "canvas outward by about 15% on every side (left, right, top, bottom). "
-                "Generate the missing content naturally — continue the person's body, "
-                "hair, clothing seamlessly beyond the original edges. The background "
-                "MUST remain the same solid green color throughout. The original photo "
-                "should remain in the center, completely unchanged. Keep the person "
-                "EXACTLY the same. Output only the extended photo."
+                "Take this portrait photo and produce an output that satisfies BOTH "
+                "of these requirements:\n\n"
+                "1. CANVAS EXTENSION: Extend the canvas outward by about 15% on every "
+                "side (left, right, top, bottom). Generate the missing content naturally "
+                "— continue the person's body, hair, and clothing seamlessly beyond the "
+                "original edges. The person stays centered and EXACTLY the same — same "
+                "face, pose, expression, features.\n\n"
+                "2. UNIFORM CHROMA GREEN BACKGROUND — CRITICAL: Replace the entire "
+                "background (everything that is NOT the person) with a single flat "
+                "uniform chroma key green color, RGB (0, 177, 64) — pure bright green. "
+                "This applies to the original frame area AND all newly extended areas. "
+                "The background must be ONE solid pure green color across the entire "
+                "frame, edge to edge.\n\n"
+                "DO NOT use white. DO NOT use gray. DO NOT use any other color. "
+                "DO NOT add gradients, lighting, shadows, vignettes, or texture to "
+                "the background. DO NOT preserve any original background elements. "
+                "Even if portions of the input background already look green, replace "
+                "the ENTIRE background with the same uniform pure chroma key green so "
+                "the result is perfectly flat and matte-able.\n\n"
+                "Output only the extended photo with uniform chroma green background."
             )
 
             i = 0

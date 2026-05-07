@@ -12,6 +12,7 @@ service_account.json
 # Server
 .server.pid
 pipeline.log
+server.log
 progress.json
 progress_log.json
 prev_ratings.json
@@ -19,6 +20,7 @@ run_info.json
 
 # Backup
 .bkp/
+webp_old/
 
 # AI models (downloaded on first run)
 *.onnx
