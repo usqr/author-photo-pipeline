@@ -7,15 +7,14 @@ Runs each step as a separate pass to avoid OOM from loading all models at once.
   Pass 1.25: Green background substitution (BiRefNet) → step1_upscaled/ (in-place)
   Pass 1.5:  Canvas extension (Gemini) → step1_upscaled/ (in-place)
   Pass 2:    Green screen keying (CorridorKey) → step2_nobg/
-  Pass 3:    B&W conversion (Gemini + per-image ratings) → step3_bw/
-  Pass 4:    Rainbow composite → step4_rainbow/
+  Pass 3:    Color adjustments (per-image ratings) → step3_bw/
+  Pass 4:    Leafs background composite → step4_rainbow/
 
 Reads ratings.json for per-image adjustments.
 """
 
 from pathlib import Path
-from PIL import Image, ImageEnhance, ImageOps
-from skimage.metrics import structural_similarity as ssim
+from PIL import Image, ImageEnhance, ImageFilter
 import cv2
 import json
 import numpy as np
@@ -25,11 +24,11 @@ import tempfile
 import threading
 from queue import Queue
 
+Image.MAX_IMAGE_PIXELS = None  # background photos can be very high-res
+
 BASE_DIR = Path(__file__).parent
 WEBP_DIR = BASE_DIR / "webp"
-RAINBOW_BG_PATH = BASE_DIR / "rainbow.png"
-BW_REF_PATH = BASE_DIR / "bw.png"
-RAINBOW_REF_PATH = BASE_DIR / "rainbow_Gokce.jpg"
+BG_PATH = BASE_DIR / "wafle.jpg"
 RATINGS_PATH = BASE_DIR / "ratings.json"
 PREV_RATINGS_PATH = BASE_DIR / "prev_ratings.json"
 SERVICE_ACCOUNT_PATH = BASE_DIR / "service_account.json"
@@ -47,16 +46,20 @@ CHROMA_GREEN = (0, 177, 64)  # Standard broadcast chroma green
 TARGET_SIZE = 280
 AI_UPSCALE_THRESHOLD = 500
 
-# Pre-compute reference histogram CDF
-_bw_ref_rgba = np.array(Image.open(BW_REF_PATH).convert("RGBA"))
-_ref_alpha = _bw_ref_rgba[:, :, 3]
-_ref_gray = np.array(Image.open(BW_REF_PATH).convert("L"))
-_ref_fg_mask = _ref_alpha > 128
-_ref_fg = _ref_gray[_ref_fg_mask]
-_ref_hist, _ = np.histogram(_ref_fg, bins=256, range=(0, 256))
-REF_CDF = np.cumsum(_ref_hist).astype(float)
-REF_CDF /= REF_CDF[-1]
+# Pass 4: blend the person's colour stats (mean/std) toward the leaf background's
+# in LAB space, as (L, a, b) strengths (0.0 = no change, 1.0 = full transfer).
+# L (lightness) is matched strongly so the subject integrates tonally with the
+# scene; a/b (colour) are matched weakly to avoid dragging in a green tint.
+BG_MATCH_STRENGTH = (0.45, 0.1, 0.1)
 
+# Pass 4: delicate drop shadow cast by the subject onto the background, so it
+# reads as standing just in front of the wall. All sizes are fractions of the
+# output side length. Set SHADOW_OPACITY = 0 to disable.
+SHADOW_OPACITY = 0.4            # peak darkness of the shadow (0..1)
+SHADOW_BLUR = 0.06             # gaussian blur radius (very diffuse, soft edge)
+SHADOW_OFFSET_X = -0.03        # horizontal offset (negative = shadow to the left)
+SHADOW_OFFSET_Y = 0.03        # vertical offset (positive = shadow downward)
+SHADOW_COLOR = (25, 20, 15)    # dark warm-neutral, suits the tan background
 
 PROGRESS_PATH = BASE_DIR / "progress.json"
 PROGRESS_LOG_PATH = BASE_DIR / "progress_log.json"
@@ -289,8 +292,8 @@ def get_gemini_client():
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def apply_rating_adjustments(gray_pil, a_np, ratings, fname):
-    """Apply per-image rating adjustments to a grayscale image.
+def apply_rating_adjustments(rgb_pil, a_np, ratings, fname):
+    """Apply per-image rating adjustments to a color image.
     Returns RGBA image with cleaned alpha."""
     r_light = get_rating(ratings, fname, "lightness", 0)
     r_contrast = get_rating(ratings, fname, "contrast", 0)
@@ -298,45 +301,45 @@ def apply_rating_adjustments(gray_pil, a_np, ratings, fname):
     r_light_areas = get_rating(ratings, fname, "light_areas", 0)
     r_sharp = get_rating(ratings, fname, "sharpness", 0)
 
-    gray_np = np.array(gray_pil)
+    rgb_np = np.array(rgb_pil.convert("RGB"))
 
-    # Curves for dark/light areas
+    # Curves for dark/light areas (applied per-channel)
     if r_dark != 0 or r_light_areas != 0:
-        gray_f = gray_np.astype(np.float32)
+        rgb_f = rgb_np.astype(np.float32)
         if r_dark < 0:
             lift = abs(r_dark) / 100.0 * 0.8
-            m = gray_f < 128
-            gray_f[m] = gray_f[m] + lift * (128 - gray_f[m])
+            m = rgb_f < 128
+            rgb_f[m] = rgb_f[m] + lift * (128 - rgb_f[m])
         elif r_dark > 0:
             crush = r_dark / 100.0 * 0.7
-            m = gray_f < 128
-            gray_f[m] = gray_f[m] * (1 - crush)
+            m = rgb_f < 128
+            rgb_f[m] = rgb_f[m] * (1 - crush)
         if r_light_areas < 0:
             pull = abs(r_light_areas) / 100.0 * 0.7
-            m = gray_f > 128
-            gray_f[m] = gray_f[m] - pull * (gray_f[m] - 128)
+            m = rgb_f > 128
+            rgb_f[m] = rgb_f[m] - pull * (rgb_f[m] - 128)
         elif r_light_areas > 0:
             push = r_light_areas / 100.0 * 0.7
-            m = gray_f > 128
-            gray_f[m] = gray_f[m] + push * (255 - gray_f[m])
-        gray_np = np.clip(gray_f, 0, 255).astype(np.uint8)
+            m = rgb_f > 128
+            rgb_f[m] = rgb_f[m] + push * (255 - rgb_f[m])
+        rgb_np = np.clip(rgb_f, 0, 255).astype(np.uint8)
 
-    gray_pil = Image.fromarray(gray_np)
+    rgb_pil = Image.fromarray(rgb_np)
 
     # Brightness
     brightness_factor = 1.0 + (r_light / 100.0) * 0.8
     if brightness_factor != 1.0:
-        gray_pil = ImageEnhance.Brightness(gray_pil).enhance(max(0.2, brightness_factor))
+        rgb_pil = ImageEnhance.Brightness(rgb_pil).enhance(max(0.2, brightness_factor))
 
     # Contrast
     contrast_factor = 1.0 + (r_contrast / 100.0) * 0.8
     if contrast_factor != 1.0:
-        gray_pil = ImageEnhance.Contrast(gray_pil).enhance(max(0.2, contrast_factor))
+        rgb_pil = ImageEnhance.Contrast(rgb_pil).enhance(max(0.2, contrast_factor))
 
     # Sharpness
     sharpness_factor = 1.0 + (r_sharp / 100.0) * 1.5
     if sharpness_factor != 1.0:
-        gray_pil = ImageEnhance.Sharpness(gray_pil).enhance(max(0.0, sharpness_factor))
+        rgb_pil = ImageEnhance.Sharpness(rgb_pil).enhance(max(0.0, sharpness_factor))
 
     has_adj = any(v != 0 for v in [r_light, r_contrast, r_dark, r_light_areas, r_sharp])
 
@@ -344,14 +347,67 @@ def apply_rating_adjustments(gray_pil, a_np, ratings, fname):
     a_float = a_np.astype(np.float32)
     a_clean = np.clip((a_float - 20) * (255.0 / (235 - 20)), 0, 255).astype(np.uint8)
 
-    gray_final = np.array(gray_pil)
-    img_bw = Image.merge("RGBA", (
-        Image.fromarray(gray_final),
-        Image.fromarray(gray_final),
-        Image.fromarray(gray_final),
-        Image.fromarray(a_clean),
-    ))
-    return img_bw, has_adj, [r_light, r_contrast, r_dark, r_light_areas, r_sharp]
+    img_out = rgb_pil.convert("RGBA")
+    img_out.putalpha(Image.fromarray(a_clean))
+    return img_out, has_adj, [r_light, r_contrast, r_dark, r_light_areas, r_sharp]
+
+
+def compute_ref_stats(rgb_np):
+    """Per-channel (mean, std) of the reference in CIELAB space (cv2)."""
+    lab = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2LAB).astype(np.float64)
+    flat = lab.reshape(-1, 3)
+    return flat.mean(axis=0), flat.std(axis=0)
+
+
+def match_histogram(rgb_np, fg_mask, ref_stats, strength):
+    """Mean/std (Reinhard) colour transfer of the foreground toward a reference,
+    performed in CIELAB space.
+
+    Per channel, the foreground is recentred to the reference (leaf) mean and
+    scaled by the reference/foreground std ratio. Working in LAB lets us match
+    lightness (L) strongly so the subject sits in the scene tonally, while
+    matching colour (a, b) weakly so little of the background's green is dragged
+    in. Only foreground pixels (fg_mask) are modified. `strength` is a per-channel
+    (L, a, b) blend between the original (0.0) and fully transferred (1.0)
+    result; a scalar applies the same strength to all channels.
+    """
+    if not fg_mask.any():
+        return rgb_np
+    if np.isscalar(strength):
+        strength = (strength, strength, strength)
+    ref_mean, ref_std = ref_stats
+    lab = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2LAB).astype(np.float64)
+    for c in range(3):
+        s = strength[c]
+        if s <= 0:
+            continue
+        src_fg = lab[:, :, c][fg_mask]
+        src_mean = src_fg.mean()
+        src_std = src_fg.std()
+        scale = (ref_std[c] / src_std) if src_std > 1e-6 else 1.0
+        transferred = (src_fg - src_mean) * scale + ref_mean[c]
+        lab[:, :, c][fg_mask] = (1.0 - s) * src_fg + s * transferred
+    lab = np.clip(lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+
+def make_drop_shadow(alpha, size):
+    """Build a soft, offset drop-shadow layer from the subject's alpha mask.
+
+    Returns an RGBA layer (size x size) holding a blurred, dimmed, slightly
+    offset silhouette in SHADOW_COLOR — composite it onto the background before
+    the subject so it reads as casting a delicate shadow on the wall behind.
+    """
+    blur = max(1.0, size * SHADOW_BLUR)
+    off_x = int(round(size * SHADOW_OFFSET_X))
+    off_y = int(round(size * SHADOW_OFFSET_Y))
+    shadow_a = alpha.point(lambda v: int(v * SHADOW_OPACITY))
+    shadow_a = shadow_a.filter(ImageFilter.GaussianBlur(blur))
+    canvas = Image.new("L", (size, size), 0)
+    canvas.paste(shadow_a, (off_x, off_y))
+    shadow = Image.new("RGBA", (size, size), SHADOW_COLOR + (0,))
+    shadow.putalpha(canvas)
+    return shadow
 
 
 # ── Pipelined execution ─────────────────────────────────────────────────────
@@ -676,40 +732,15 @@ def run_pipeline(files, ratings, regen_from):
             # this will be killed cleanly at interpreter shutdown.
             threading.Event().wait()
 
-    # ── Pass 3: B&W Conversion (Gemini + adjustments) ──
+    # ── Pass 3: Color Adjustments (per-image ratings, no B&W) ──
 
     def worker_pass3():
         try:
             if regen_from > 3:
-                _mark_pass_skipped(3, "B&W")
+                _mark_pass_skipped(3, "Adjust")
                 _log("PASS 3: Skipped (reusing step3 output)")
                 _drain(q2, q3)
                 return
-
-            from google import genai
-            from google.oauth2 import service_account
-
-            client = None
-            if SERVICE_ACCOUNT_PATH.exists():
-                credentials = service_account.Credentials.from_service_account_file(
-                    str(SERVICE_ACCOUNT_PATH),
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
-                client = genai.Client(
-                    vertexai=True, project=GEMINI_PROJECT,
-                    location=GEMINI_LOCATION, credentials=credentials,
-                )
-                _log("P3: Gemini B&W conversion connected")
-
-            bw_prompt = (
-                "Convert this portrait photo to high-contrast black and white, "
-                "matching the style of the reference image provided. "
-                "The result should have: bright whites on skin highlights, "
-                "deep rich blacks in hair and dark areas, sharp detail, "
-                "and a clean professional look. Keep the person on a transparent/white "
-                "background. Keep all details identical — same pose, expression, features. "
-                "Output only the B&W image."
-            )
 
             i = 0
             while True:
@@ -722,49 +753,24 @@ def run_pipeline(files, ratings, regen_from):
                 s2_path = STEP2_DIR / (stem + ".png")
                 if not s2_path.exists():
                     _log(f"[P3 {i}/{total}] {fname}: skip (no step2)")
-                    write_progress(3, "B&W (Gemini)", i, total, fname, "skipped")
+                    write_progress(3, "Adjust", i, total, fname, "skipped")
                     write_progress_file_done(3, fname, "skipped")
                     q3.put(f)
                     continue
 
-                write_progress(3, "B&W (Gemini)", i, total, fname)
+                write_progress(3, "Adjust", i, total, fname)
                 img = Image.open(s2_path).convert("RGBA")
                 _, _, _, a = img.split()
                 a_np = np.array(a)
 
-                gemini_gray = None
-                bw_method = "gemini"
-                if client is not None:
-                    result = gemini_enhance(client, img.convert("RGB"), prompt=bw_prompt)
-                    if result is not None:
-                        gemini_gray = result.convert("L")
-
-                if gemini_gray is None:
-                    bw_method = "local"
-                    gray_np = np.array(img.convert("L"))
-                    fg_mask = a_np > 128
-                    if fg_mask.any():
-                        src_fg = gray_np[fg_mask]
-                        src_hist, _ = np.histogram(src_fg, bins=256, range=(0, 256))
-                        src_cdf = np.cumsum(src_hist).astype(float)
-                        src_cdf /= src_cdf[-1]
-                        mapping = np.zeros(256, dtype=np.uint8)
-                        for j in range(256):
-                            k = np.searchsorted(REF_CDF, src_cdf[j])
-                            mapping[j] = min(k, 255)
-                        gray_np = mapping[gray_np]
-                    gemini_gray = Image.fromarray(gray_np)
-                    gemini_gray = ImageOps.autocontrast(gemini_gray, cutoff=0.5)
-
-                img_bw, has_adj, adj_vals = apply_rating_adjustments(gemini_gray, a_np, ratings, fname)
+                img_adj, has_adj, adj_vals = apply_rating_adjustments(img, a_np, ratings, fname)
                 adj_str = ""
                 if has_adj:
                     adj_str = f" [L={adj_vals[0]} C={adj_vals[1]} D={adj_vals[2]} H={adj_vals[3]} S={adj_vals[4]}]"
-                _log(f"[P3 {i}/{total}] {fname}: {bw_method}{adj_str}")
+                _log(f"[P3 {i}/{total}] {fname}: color{adj_str}")
 
-                img_bw.save(STEP3_DIR / (stem + ".png"), "PNG")
-                status = "done" if bw_method == "gemini" else "fallback"
-                write_progress_file_done(3, fname, status)
+                img_adj.save(STEP3_DIR / (stem + ".png"), "PNG")
+                write_progress_file_done(3, fname)
                 q3.put(f)
 
             write_progress_pass_done(3)
@@ -775,11 +781,20 @@ def run_pipeline(files, ratings, regen_from):
         finally:
             q3.put(_SENTINEL)
 
-    # ── Pass 4: Rainbow Composite ──
+    # ── Pass 4: Leafs Background Composite ──
 
     def worker_pass4():
         try:
-            bg_img = Image.open(RAINBOW_BG_PATH).convert("RGBA")
+            bg_img = Image.open(BG_PATH).convert("RGBA")
+            # Center-crop the background to a square so resizing won't distort it.
+            bw_, bh_ = bg_img.size
+            if bw_ != bh_:
+                bside = min(bw_, bh_)
+                bl = (bw_ - bside) // 2
+                bt = (bh_ - bside) // 2
+                bg_img = bg_img.crop((bl, bt, bl + bside, bt + bside))
+            # Reference colour stats = the background (per RGB channel).
+            ref_stats = compute_ref_stats(np.array(bg_img.convert("RGB")))
             i = 0
             while True:
                 f = q3.get()
@@ -790,11 +805,11 @@ def run_pipeline(files, ratings, regen_from):
                 stem = Path(fname).stem
                 s3_path = STEP3_DIR / (stem + ".png")
                 if not s3_path.exists():
-                    write_progress(4, "Rainbow", i, total, fname, "skipped")
+                    write_progress(4, "Leafs BG", i, total, fname, "skipped")
                     write_progress_file_done(4, fname, "skipped")
                     continue
 
-                write_progress(4, "Rainbow", i, total, fname)
+                write_progress(4, "Leafs BG", i, total, fname)
                 img = Image.open(s3_path).convert("RGBA")
                 w, h = img.size
                 if w != h:
@@ -803,8 +818,24 @@ def run_pipeline(files, ratings, regen_from):
                     top = (h - side) // 2
                     img = img.crop((left, top, left + side, top + side))
 
+                # Align the person's per-channel histogram to the leaf background
+                # before compositing, so the subject sits in the foliage palette.
+                if np.any(np.asarray(BG_MATCH_STRENGTH) > 0):
+                    r, g, b, a = img.split()
+                    fg_mask = np.array(a) > 0
+                    matched = match_histogram(
+                        np.array(Image.merge("RGB", (r, g, b))),
+                        fg_mask, ref_stats, BG_MATCH_STRENGTH,
+                    )
+                    img = Image.merge("RGBA", (
+                        *Image.fromarray(matched).split(), a,
+                    ))
+
                 size = img.size[0]
                 bg = bg_img.copy().resize((size, size), Image.Resampling.LANCZOS).convert("RGBA")
+                # Cast a delicate drop shadow onto the background before the subject.
+                if SHADOW_OPACITY > 0:
+                    bg = Image.alpha_composite(bg, make_drop_shadow(img.split()[3], size))
                 result = Image.alpha_composite(bg, img)
                 save_img(result, STEP4_DIR / fname)
                 _log(f"[P4 {i}/{total}] {fname}: done")
@@ -820,7 +851,7 @@ def run_pipeline(files, ratings, regen_from):
 
     _log("=" * 60)
     _log("PIPELINE: 6 stages running concurrently")
-    _log("  P1:Upscale → P1.25:Green BG → P1.5:Extend → P2:Key → P3:B&W → P4:Rainbow")
+    _log("  P1:Upscale → P1.25:Green BG → P1.5:Extend → P2:Key → P3:Adjust → P4:Leafs BG")
     _log("=" * 60)
 
     p2_thread = threading.Thread(target=worker_pass2, name="P2", daemon=True)
@@ -896,21 +927,6 @@ def main():
 
     # Run pipelined passes
     run_pipeline(files, ratings, regen_from)
-
-    # SSIM
-    gokce_bw = STEP3_DIR / "gokce-f3ee914ba0 (1).png"
-    gokce_rainbow = STEP4_DIR / "gokce-f3ee914ba0 (1).jpg"
-    if gokce_bw.exists() and gokce_rainbow.exists():
-        print("--- Gokce SSIM ---")
-        for path, ref, label in [
-            (gokce_bw, BW_REF_PATH, "B&W"),
-            (gokce_rainbow, RAINBOW_REF_PATH, "Rainbow"),
-        ]:
-            img_arr = np.array(Image.open(path).convert("L"))
-            ref_arr = np.array(Image.open(ref).convert("L"))
-            if img_arr.shape != ref_arr.shape:
-                img_arr = cv2.resize(img_arr, (ref_arr.shape[1], ref_arr.shape[0]))
-            print(f"  SSIM ({label}): {ssim(ref_arr, img_arr):.4f}")
 
     # Save current ratings as prev for next run's diff
     save_prev_ratings(ratings)
