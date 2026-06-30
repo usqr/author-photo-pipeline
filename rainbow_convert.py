@@ -43,6 +43,7 @@ STEP3_DIR = BASE_DIR / "step3_bw"
 STEP4_DIR = BASE_DIR / "step4_rainbow"
 CORRIDORKEY_DIR = BASE_DIR / "CorridorKey"
 CHROMA_GREEN = (0, 177, 64)  # Standard broadcast chroma green
+TARGET_LONG_EDGE = 2048  # Lanczos upscale target; Nano Banana itself caps at ~1024 px
 
 TARGET_SIZE = 280
 AI_UPSCALE_THRESHOLD = 500
@@ -221,13 +222,41 @@ def save_img(img, path):
         img.convert("RGB").save(path, "JPEG", quality=95)
 
 
+def upscale_long_edge(img_pil, target=TARGET_LONG_EDGE):
+    """Lanczos-upscale so the longest edge is `target` px (no-op if already
+    larger). Nano Banana caps output at ~1 MP (~1024 px) regardless of the
+    image_size config, so true 2K has to be done deterministically here."""
+    w, h = img_pil.size
+    long_edge = max(w, h)
+    if long_edge >= target:
+        return img_pil
+    scale = target / long_edge
+    return img_pil.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
+
+
 # ── Pass 1: Upscale (Gemini Nano Banana) ─────────────────────────────────────
 
-def gemini_enhance(client, img_pil, prompt=None):
+def gemini_enhance(client, img_pil, prompt=None, image_size=None, aspect_ratio=None):
     """Enhance a portrait image using Gemini image generation.
-    Returns enhanced PIL Image or None on failure."""
+    Returns enhanced PIL Image or None on failure.
+
+    image_size: one of "1K", "2K", "4K" — requested output resolution. The
+        current Nano Banana default is 1K, aspect-preserving; pass "2K"/"4K"
+        to actually upscale. (Older model revisions silently padded to 1024².)
+    aspect_ratio: e.g. "1:1", "3:4" — forces output framing. Omit to preserve
+        the input image's aspect ratio.
+    """
     from google.genai import types as gtypes
     import time
+
+    image_config = None
+    if image_size or aspect_ratio:
+        ic_kwargs = {}
+        if image_size:
+            ic_kwargs["image_size"] = image_size
+        if aspect_ratio:
+            ic_kwargs["aspect_ratio"] = aspect_ratio
+        image_config = gtypes.ImageConfig(**ic_kwargs)
 
     if prompt is None:
         prompt = (
@@ -247,6 +276,7 @@ def gemini_enhance(client, img_pil, prompt=None):
                 contents=[prompt, img_pil],
                 config=gtypes.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
+                    image_config=image_config,
                 ),
             )
             for part in response.parts:
@@ -423,8 +453,13 @@ def run_pipeline(files, ratings, regen_from):
                 fname = f.name
                 write_progress(1, "Enhance (Gemini)", i, total, fname)
                 img = Image.open(f).convert("RGBA")
-                result = gemini_enhance(client, img.convert("RGB"))
+                # aspect_ratio="1:1" restores the squared canvas (Nano Banana no
+                # longer squares portraits by default). image_size is forward-
+                # compat; the real 2K comes from the Lanczos pass below.
+                result = gemini_enhance(client, img.convert("RGB"),
+                                        image_size="2K", aspect_ratio="1:1")
                 if result is not None:
+                    result = upscale_long_edge(result)
                     _log(f"[P1 {i}/{total}] {fname}: {img.size[0]}x{img.size[1]} → {result.size[0]}x{result.size[1]}")
                     save_img(result, STEP1_DIR / fname)
                     write_progress_file_done(1, fname)
@@ -523,25 +558,23 @@ def run_pipeline(files, ratings, regen_from):
             _log("P1.5: Gemini canvas extension connected")
 
             extend_prompt = (
-                "Take this portrait photo and produce an output that satisfies BOTH "
-                "of these requirements:\n\n"
-                "1. CANVAS EXTENSION: Extend the canvas outward by about 15% on every "
-                "side (left, right, top, bottom). Generate the missing content naturally "
-                "— continue the person's body, hair, and clothing seamlessly beyond the "
-                "original edges. The person stays centered and EXACTLY the same — same "
-                "face, pose, expression, features.\n\n"
+                "Re-frame this portrait as a SQUARE. The head and shoulders should "
+                "FILL most of the frame — the top of the hair sits near the top "
+                "edge and the shoulders span most of the width. Keep only a small "
+                "even margin around the person; do NOT zoom out or shrink them.\n\n"
+                "1. EXTEND THE BODY: The torso and shoulders are cropped at the "
+                "bottom edge. GENERATE the natural continuation of the shoulders, "
+                "chest and clothing downward so the body does NOT end in a flat "
+                "straight cut or a tapered point. Keep the face, hair, expression "
+                "and features EXACTLY identical and undistorted — same person.\n\n"
                 "2. UNIFORM CHROMA GREEN BACKGROUND — CRITICAL: Replace the entire "
                 "background (everything that is NOT the person) with a single flat "
                 "uniform chroma key green color, RGB (0, 177, 64) — pure bright green. "
-                "This applies to the original frame area AND all newly extended areas. "
-                "The background must be ONE solid pure green color across the entire "
-                "frame, edge to edge.\n\n"
-                "DO NOT use white. DO NOT use gray. DO NOT use any other color. "
-                "DO NOT add gradients, lighting, shadows, vignettes, or texture to "
-                "the background. DO NOT preserve any original background elements. "
-                "Even if portions of the input background already look green, replace "
-                "the ENTIRE background with the same uniform pure chroma key green so "
-                "the result is perfectly flat and matte-able.\n\n"
+                "The background must be ONE solid pure green color, edge to edge, "
+                "with no hard rectangular edges around the body.\n\n"
+                "DO NOT use white, gray, or any other color. DO NOT add gradients, "
+                "lighting, shadows, vignettes, or texture to the background. DO NOT "
+                "preserve any original background elements.\n\n"
                 "Output only the extended photo with uniform chroma green background."
             )
 
@@ -561,20 +594,28 @@ def run_pipeline(files, ratings, regen_from):
 
                 write_progress(1.5, "Canvas Extend (Gemini)", i, total, fname)
                 img = Image.open(s1_path).convert("RGB")
+                # Ask Gemini to re-frame square and genuinely outpaint the
+                # torso/shoulders that were cropped, on uniform green. Feeding
+                # the image directly (no pre-pad) makes the model generate new
+                # body; pre-padding green just makes it taper the body into a cut.
                 try:
-                    result = gemini_enhance(client, img, prompt=extend_prompt)
+                    result = gemini_enhance(client, img, prompt=extend_prompt,
+                                            image_size="2K", aspect_ratio="1:1")
                 except Exception as e:
-                    _log(f"[P1.5 {i}/{total}] {fname}: error {str(e)[:80]}")
+                    _log(f"[P1.5 {i}/{total}] {fname}: error {str(e)[:80]} — keeping upscaled original")
+                    save_img(upscale_long_edge(img), s1_path)
                     write_progress_file_done(1.5, fname, "error")
                     q15.put(f)
                     continue
 
                 if result is not None:
+                    result = upscale_long_edge(result)
                     _log(f"[P1.5 {i}/{total}] {fname}: {img.size[0]}x{img.size[1]} → {result.size[0]}x{result.size[1]}")
                     save_img(result, s1_path)
                     write_progress_file_done(1.5, fname)
                 else:
-                    _log(f"[P1.5 {i}/{total}] {fname}: failed, keeping original")
+                    _log(f"[P1.5 {i}/{total}] {fname}: AI extend failed, keeping upscaled original")
+                    save_img(upscale_long_edge(img), s1_path)
                     write_progress_file_done(1.5, fname, "fallback")
                 q15.put(f)
 
@@ -738,6 +779,11 @@ def run_pipeline(files, ratings, regen_from):
                     result = gemini_enhance(client, img.convert("RGB"), prompt=bw_prompt)
                     if result is not None:
                         gemini_gray = result.convert("L")
+                        # Gemini caps its output at ~1 MP, so the B&W result is
+                        # smaller than the keyed image. Conform it to the
+                        # high-res CorridorKey alpha before they get merged.
+                        if gemini_gray.size != img.size:
+                            gemini_gray = gemini_gray.resize(img.size, Image.LANCZOS)
 
                 if gemini_gray is None:
                     bw_method = "local"
