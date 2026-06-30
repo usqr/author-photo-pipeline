@@ -31,3 +31,15 @@ webp_old/
 # Intermediate step folders at top level (large, reproducible)
 /step1_upscaled/
 /step2_nobg/
+
+# Generated output + source images (large, reproducible / not source-controlled)
+/step3_bw/
+/step4_rainbow/
+/baseline_bw/
+/baseline_rainbow/
+/webp/
+/webp_*/
+/exp/
+/ratings.json
+# Timestamped run archives (YYMMDD_HHMM/)
+/[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]/
