@@ -32,6 +32,23 @@ BG_PATH = BASE_DIR / "wafle.jpg"
 RATINGS_PATH = BASE_DIR / "ratings.json"
 PREV_RATINGS_PATH = BASE_DIR / "prev_ratings.json"
 SERVICE_ACCOUNT_PATH = BASE_DIR / "service_account.json"
+
+SETTINGS_PATH = BASE_DIR / "settings.json"
+IMAGE_OPTIONS_PATH = BASE_DIR / "image_options.json"
+
+BG_PATHS = {
+    "rainbow": BASE_DIR / "rainbow.png",
+    "leafs":   BASE_DIR / "leafs.jpeg",
+    "cork":    BASE_DIR / "wafle.jpg",
+}
+
+DEFAULT_SETTINGS = {
+    "steps": {"upscale": True, "canvas_extend": True, "bw": True, "bg_match": True},
+    "bg_match_amount": 50,
+    "background": "rainbow",
+    "custom_background": "",
+}
+
 GEMINI_PROJECT = "gemini-image-generation-492101"
 GEMINI_LOCATION = "us-central1"
 GEMINI_MODEL = "gemini-2.5-flash-image"
@@ -210,6 +227,90 @@ def get_rating(ratings, filename, key, default=0):
     if filename in ratings and key in ratings[filename]:
         return ratings[filename][key]
     return default
+
+
+def clamp_amount(v):
+    """Coerce a colour-match amount to an int in [0, 100]; 50 on garbage."""
+    try:
+        v = int(round(float(v)))
+    except (TypeError, ValueError):
+        return 50
+    return max(0, min(100, v))
+
+
+def load_settings():
+    """Global run settings, validated and merged over DEFAULT_SETTINGS.
+    Missing or corrupt settings.json → a fresh copy of the defaults."""
+    s = {
+        "steps": dict(DEFAULT_SETTINGS["steps"]),
+        "bg_match_amount": DEFAULT_SETTINGS["bg_match_amount"],
+        "background": DEFAULT_SETTINGS["background"],
+        "custom_background": DEFAULT_SETTINGS["custom_background"],
+    }
+    if SETTINGS_PATH.exists():
+        try:
+            data = json.loads(SETTINGS_PATH.read_text())
+        except Exception:
+            data = {}
+        if isinstance(data.get("steps"), dict):
+            for k in s["steps"]:
+                if k in data["steps"]:
+                    s["steps"][k] = bool(data["steps"][k])
+        if "bg_match_amount" in data:
+            s["bg_match_amount"] = clamp_amount(data["bg_match_amount"])
+        if data.get("background") in BG_PATHS or data.get("background") == "custom":
+            s["background"] = data["background"]
+        if isinstance(data.get("custom_background"), str):
+            s["custom_background"] = data["custom_background"]
+    return s
+
+
+def load_image_options():
+    """Per-image overrides: {fname: {upscale, canvas_extend, bg_match}}. {} on error."""
+    if IMAGE_OPTIONS_PATH.exists():
+        try:
+            data = json.loads(IMAGE_OPTIONS_PATH.read_text())
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def opt_bool(options, fname, key, default):
+    entry = options.get(fname)
+    if isinstance(entry, dict) and key in entry:
+        return bool(entry[key])
+    return default
+
+
+def effective_upscale(settings, options, fname):
+    return opt_bool(options, fname, "upscale", settings["steps"]["upscale"])
+
+
+def effective_extend(settings, options, fname):
+    return opt_bool(options, fname, "canvas_extend", settings["steps"]["canvas_extend"])
+
+
+def effective_bg_match_amount(settings, options, fname):
+    """Resolved colour-match amount (0..100) for one file. 0 when the step is off."""
+    if not settings["steps"].get("bg_match", True):
+        return 0
+    entry = options.get(fname)
+    if isinstance(entry, dict) and "bg_match" in entry:
+        return clamp_amount(entry["bg_match"])
+    return clamp_amount(settings["bg_match_amount"])
+
+
+def background_path(settings):
+    if settings.get("background") == "custom":
+        name = Path(settings.get("custom_background") or "").name  # strip any directory
+        if name:
+            p = BASE_DIR / name
+            if p.exists():
+                return p
+        return BG_PATHS["rainbow"]
+    return BG_PATHS.get(settings.get("background"), BG_PATHS["rainbow"])
 
 
 def save_img(img, path):

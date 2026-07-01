@@ -1,0 +1,6 @@
+{
+  "steps": {"upscale": true, "canvas_extend": true, "bw": true, "bg_match": true},
+  "bg_match_amount": 50,
+  "background": "rainbow",
+  "custom_background": ""
+}
