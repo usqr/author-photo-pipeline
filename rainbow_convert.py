@@ -14,7 +14,7 @@ Reads ratings.json for per-image adjustments.
 """
 
 from pathlib import Path
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import cv2
 import json
 import numpy as np
@@ -28,7 +28,7 @@ Image.MAX_IMAGE_PIXELS = None  # background photos can be very high-res
 
 BASE_DIR = Path(__file__).parent
 WEBP_DIR = BASE_DIR / "webp"
-BG_PATH = BASE_DIR / "wafle.jpg"
+BW_REF_PATH = BASE_DIR / "bw.png"
 RATINGS_PATH = BASE_DIR / "ratings.json"
 PREV_RATINGS_PATH = BASE_DIR / "prev_ratings.json"
 SERVICE_ACCOUNT_PATH = BASE_DIR / "service_account.json"
@@ -64,11 +64,11 @@ TARGET_LONG_EDGE = 2048  # Lanczos upscale target; Nano Banana itself caps at ~1
 TARGET_SIZE = 280
 AI_UPSCALE_THRESHOLD = 500
 
-# Pass 4: blend the person's colour stats (mean/std) toward the leaf background's
-# in LAB space, as (L, a, b) strengths (0.0 = no change, 1.0 = full transfer).
-# L (lightness) is matched strongly so the subject integrates tonally with the
-# scene; a/b (colour) are matched weakly to avoid dragging in a green tint.
-BG_MATCH_STRENGTH = (0.45, 0.1, 0.1)
+# Pass 4: blend the person's colour stats (mean/std) toward the background's in
+# LAB space, as (L, a, b) strengths (0.0 = no change, 1.0 = full transfer). The
+# per-run/per-file strength is resolved at composite time via bg_match_strength()
+# + effective_bg_match_amount(); L (lightness) is weighted ~4.5x more than a/b so
+# the subject integrates tonally without dragging in the background's colour cast.
 
 # Pass 4: delicate drop shadow cast by the subject onto the background, so it
 # reads as standing just in front of the wall. All sizes are fractions of the
@@ -313,6 +313,14 @@ def background_path(settings):
     return BG_PATHS.get(settings.get("background"), BG_PATHS["rainbow"])
 
 
+def bg_match_strength(amount):
+    """Map a 0..100 colour-match amount to per-channel LAB transfer strength.
+    Calibrated so amount=50 reproduces the tuned default (0.45, 0.10, 0.10):
+    lightness (L) matched strongly, colour (a, b) matched weakly."""
+    a = clamp_amount(amount) / 100.0
+    return (a * 0.9, a * 0.2, a * 0.2)
+
+
 def any_wants_upscale(settings, options, files):
     return any(effective_upscale(settings, options, f.name) for f in files)
 
@@ -514,6 +522,8 @@ def match_histogram(rgb_np, fg_mask, ref_stats, strength):
         return rgb_np
     if np.isscalar(strength):
         strength = (strength, strength, strength)
+    if not any(s > 0 for s in strength):
+        return rgb_np
     ref_mean, ref_std = ref_stats
     lab = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2LAB).astype(np.float64)
     for c in range(3):
@@ -528,6 +538,23 @@ def match_histogram(rgb_np, fg_mask, ref_stats, strength):
         lab[:, :, c][fg_mask] = (1.0 - s) * src_fg + s * transferred
     lab = np.clip(lab, 0, 255).astype(np.uint8)
     return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+
+_REF_CDF = None
+
+
+def _ref_cdf():
+    """Cached CDF of the B&W reference (bw.png) foreground, for local B&W fallback."""
+    global _REF_CDF
+    if _REF_CDF is None:
+        ref_rgba = np.array(Image.open(BW_REF_PATH).convert("RGBA"))
+        ref_gray = np.array(Image.open(BW_REF_PATH).convert("L"))
+        fg = ref_gray[ref_rgba[:, :, 3] > 128]
+        hist, _ = np.histogram(fg, bins=256, range=(0, 256))
+        cdf = np.cumsum(hist).astype(float)
+        cdf /= cdf[-1]
+        _REF_CDF = cdf
+    return _REF_CDF
 
 
 def make_drop_shadow(alpha, size):
@@ -920,6 +947,24 @@ def run_pipeline(files, ratings, regen_from, settings, options):
                 _drain(q2, q3)
                 return
 
+            do_bw = settings["steps"].get("bw", True)
+            client = None
+            bw_prompt = (
+                "Convert this portrait photo to high-contrast black and white, "
+                "matching the style of the reference image provided. "
+                "The result should have: bright whites on skin highlights, "
+                "deep rich blacks in hair and dark areas, sharp detail, "
+                "and a clean professional look. Keep the person on a transparent/white "
+                "background. Keep all details identical — same pose, expression, features. "
+                "Output only the B&W image."
+            )
+            if do_bw and SERVICE_ACCOUNT_PATH.exists():
+                try:
+                    client = get_gemini_client()
+                    _log("P3: Gemini B&W conversion connected")
+                except Exception as e:
+                    _log(f"P3: Gemini connect failed ({e}); local B&W fallback")
+
             i = 0
             while True:
                 f = q2.get()
@@ -941,11 +986,36 @@ def run_pipeline(files, ratings, regen_from, settings, options):
                 _, _, _, a = img.split()
                 a_np = np.array(a)
 
-                img_adj, has_adj, adj_vals = apply_rating_adjustments(img, a_np, ratings, fname)
+                if do_bw:
+                    gray = None
+                    if client is not None:
+                        result = gemini_enhance(client, img.convert("RGB"), prompt=bw_prompt)
+                        if result is not None:
+                            gray = result.convert("L")
+                    if gray is None:
+                        gray_np = np.array(img.convert("L"))
+                        fg = a_np > 128
+                        if fg.any():
+                            src = gray_np[fg]
+                            sh, _ = np.histogram(src, bins=256, range=(0, 256))
+                            scdf = np.cumsum(sh).astype(float); scdf /= scdf[-1]
+                            ref_cdf = _ref_cdf()
+                            mapping = np.array(
+                                [min(int(np.searchsorted(ref_cdf, scdf[j])), 255) for j in range(256)],
+                                dtype=np.uint8)
+                            gray_np = mapping[gray_np]
+                        gray = ImageOps.autocontrast(Image.fromarray(gray_np), cutoff=0.5)
+                    base_rgb = gray.convert("RGB")
+                    kind = "bw"
+                else:
+                    base_rgb = img.convert("RGB")
+                    kind = "color"
+
+                img_adj, has_adj, adj_vals = apply_rating_adjustments(base_rgb, a_np, ratings, fname)
                 adj_str = ""
                 if has_adj:
                     adj_str = f" [L={adj_vals[0]} C={adj_vals[1]} D={adj_vals[2]} H={adj_vals[3]} S={adj_vals[4]}]"
-                _log(f"[P3 {i}/{total}] {fname}: color{adj_str}")
+                _log(f"[P3 {i}/{total}] {fname}: {kind}{adj_str}")
 
                 img_adj.save(STEP3_DIR / (stem + ".png"), "PNG")
                 write_progress_file_done(3, fname)
@@ -963,7 +1033,7 @@ def run_pipeline(files, ratings, regen_from, settings, options):
 
     def worker_pass4():
         try:
-            bg_img = Image.open(BG_PATH).convert("RGBA")
+            bg_img = Image.open(background_path(settings)).convert("RGBA")
             # Center-crop the background to a square so resizing won't distort it.
             bw_, bh_ = bg_img.size
             if bw_ != bh_:
@@ -998,16 +1068,15 @@ def run_pipeline(files, ratings, regen_from, settings, options):
 
                 # Align the person's per-channel histogram to the leaf background
                 # before compositing, so the subject sits in the foliage palette.
-                if np.any(np.asarray(BG_MATCH_STRENGTH) > 0):
+                strength = bg_match_strength(effective_bg_match_amount(settings, options, fname))
+                if any(s > 0 for s in strength):
                     r, g, b, a = img.split()
                     fg_mask = np.array(a) > 0
                     matched = match_histogram(
                         np.array(Image.merge("RGB", (r, g, b))),
-                        fg_mask, ref_stats, BG_MATCH_STRENGTH,
+                        fg_mask, ref_stats, strength,
                     )
-                    img = Image.merge("RGBA", (
-                        *Image.fromarray(matched).split(), a,
-                    ))
+                    img = Image.merge("RGBA", (*Image.fromarray(matched).split(), a))
 
                 size = img.size[0]
                 bg = bg_img.copy().resize((size, size), Image.Resampling.LANCZOS).convert("RGBA")
