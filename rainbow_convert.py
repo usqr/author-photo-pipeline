@@ -452,6 +452,12 @@ def apply_rating_adjustments(rgb_pil, a_np, ratings, fname):
     r_light_areas = get_rating(ratings, fname, "light_areas", 0)
     r_sharp = get_rating(ratings, fname, "sharpness", 0)
 
+    # Gemini B&W can return a different size than the keyed alpha; align them
+    # so the later putalpha/merge don't raise "images do not match".
+    ah, aw = a_np.shape[:2]
+    if rgb_pil.size != (aw, ah):
+        rgb_pil = rgb_pil.resize((aw, ah), Image.LANCZOS)
+
     rgb_np = np.array(rgb_pil.convert("RGB"))
 
     # Curves for dark/light areas (applied per-channel)
