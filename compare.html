@@ -123,8 +123,6 @@ h2{margin-top:25px;font-size:16px}
 <span class="badge" style="background:#1a3a2a;color:#4ecca3" onclick="filterRows('ok')" id="badge-ok">OK</span>
 <span class="badge" style="background:#3a2a00;color:#f0a500" onclick="filterRows('changed')" id="badge-changed">Changed</span>
 </div>
-<h2>Reference</h2>
-<div class="ref-row" id="ref-row"></div>
 <h2>All Authors</h2>
 <div id="grid"></div>
 <div class="export-area">
@@ -158,23 +156,23 @@ r.innerHTML=
 '<div class="rlbl">'+f.name+'</div>'+
 '<div class="author-images">'+
 '<div class="card"><img class="img-n" src="webp/'+en(f.name)+'"><div class="label cn">Original</div></div>'+
-'<div class="card"><img class="img-n" src="'+NR+'/step3_bw/'+en(f.stem)+'.png"><div class="label cn">Color</div></div>'+
-'<div class="card"><img class="img-n" src="'+NR+'/step4_rainbow/'+en(f.name)+'"><div class="label cn">Leafs</div></div>'+
+'<div class="card"><img class="img-n" src="'+NR+'/step3_bw/'+en(f.stem)+'.png"><div class="label cn">Adjust</div></div>'+
+'<div class="card"><img class="img-n" src="'+NR+'/step4_rainbow/'+en(f.name)+'"><div class="label cn">BG</div></div>'+
 '</div>'+
 '<div class="sp" id="sl-'+i+'"></div>'+
 '</div>'+
-'<div class="rsec">'+
-'<div class="rlbl-sm cp">prev</div>'+
+(PR?('<div class="rsec">'+
+'<div class="rlbl-sm cp">last ('+PR+')</div>'+
 '<div class="author-images">'+
-'<div class="card"><img class="img-p" src="'+PR+'/step3_bw/'+en(f.stem)+'.png"><div class="label cp">Color</div></div>'+
-'<div class="card"><img class="img-p" src="'+PR+'/step4_rainbow/'+en(f.name)+'"><div class="label cp">Leafs</div></div>'+
+'<div class="card"><img class="img-p" src="'+PR+'/step3_bw/'+en(f.stem)+'.png" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cp">Adjust</div></div>'+
+'<div class="card"><img class="img-p" src="'+PR+'/step4_rainbow/'+en(f.name)+'" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cp">BG</div></div>'+
 '</div>'+
-'</div>'+
+'</div>'):'')+
 '<div class="rsec">'+
-'<div class="rlbl-sm cb">baseline</div>'+
+'<div class="rlbl-sm cb">first (baseline)</div>'+
 '<div class="author-images">'+
-'<div class="card"><img class="img-b" src="baseline_bw/'+en(f.stem)+'.png"><div class="label cb">Color</div></div>'+
-'<div class="card"><img class="img-b" src="baseline_rainbow/'+en(f.name)+'"><div class="label cb">Leafs</div></div>'+
+'<div class="card"><img class="img-b" src="baseline_bw/'+en(f.stem)+'.png" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cb">Adjust</div></div>'+
+'<div class="card"><img class="img-b" src="baseline_rainbow/'+en(f.name)+'" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cb">BG</div></div>'+
 '</div>'+
 '</div>';
 g.appendChild(r);
@@ -435,18 +433,6 @@ function checkRunning(){
 
 var st;function as(){clearTimeout(st);st=setTimeout(function(){localStorage.setItem("arV5h",JSON.stringify(ratings));},1000);}
 
-function buildRefRow(){
-  var en=encodeURIComponent;
-  var ref=document.getElementById("ref-row");
-  ref.innerHTML=
-    '<div class="card"><img src="webp/gokce-f3ee914ba0%20(1).jpg"><div class="label">Original</div></div>'+
-    (NR?'<div class="card"><img src="'+NR+'/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #4ecca3"><div class="label cn">New</div></div>':'')+
-    (PR?'<div class="card"><img src="'+PR+'/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #f0a500"><div class="label cp">Prev</div></div>':'')+
-    '<div class="card"><img src="baseline_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #e94560"><div class="label cb">Base</div></div>'+
-    '<div class="card"><img src="bw.png" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF bw</div></div>'+
-    '<div class="card"><img src="rainbow_Gokce.jpg" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF rainbow</div></div>';
-}
-
 async function loadDynamic(){
   // Fetch run info
   try{
@@ -471,7 +457,6 @@ async function loadDynamic(){
   }catch(e){PREV_RATINGS={};}
 
   // Build page
-  buildRefRow();
   init();
   checkRunning();
 
