@@ -98,6 +98,14 @@ def test_background_path_custom(tmp_path, monkeypatch):
     ) == rc.BG_PATHS["rainbow"]
 
 
+def test_any_wants_helpers():
+    s = {"steps": {"upscale": False, "canvas_extend": False, "bw": True, "bg_match": True}}
+    files = [type("F", (), {"name": n})() for n in ("a.jpg", "b.jpg")]
+    opts = {"b.jpg": {"upscale": True}}
+    assert rc.any_wants_upscale(s, opts, files) is True     # b overrides on
+    assert rc.any_wants_extend(s, {}, files) is False        # nobody wants extend
+
+
 def test_load_settings_custom_background(tmp_path, monkeypatch):
     p = tmp_path / "settings.json"
     p.write_text(json.dumps({"background": "custom", "custom_background": "custom_bg.jpg"}))

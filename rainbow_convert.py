@@ -313,6 +313,14 @@ def background_path(settings):
     return BG_PATHS.get(settings.get("background"), BG_PATHS["rainbow"])
 
 
+def any_wants_upscale(settings, options, files):
+    return any(effective_upscale(settings, options, f.name) for f in files)
+
+
+def any_wants_extend(settings, options, files):
+    return any(effective_extend(settings, options, f.name) for f in files)
+
+
 def save_img(img, path):
     suffix = path.suffix.lower()
     if suffix == ".png":
@@ -561,7 +569,7 @@ def _drain(q_in, q_out):
         q_out.put(item)
 
 
-def run_pipeline(files, ratings, regen_from):
+def run_pipeline(files, ratings, regen_from, settings, options):
     """Run all passes concurrently in a pipelined fashion."""
     total = len(files)
     q1 = Queue()     # P1 → P1.25
@@ -580,6 +588,16 @@ def run_pipeline(files, ratings, regen_from):
                 _log("PASS 1: Skipped (reusing step1 output)")
                 for f in files:
                     q1.put(f)
+                return
+
+            if not any_wants_upscale(settings, options, files):
+                _log("PASS 1: Upscale off for all files — copying originals")
+                for i, f in enumerate(files, 1):
+                    write_progress(1, "Copy (upscale off)", i, total, f.name)
+                    save_img(Image.open(f).convert("RGBA"), STEP1_DIR / f.name)
+                    write_progress_file_done(1, f.name)
+                    q1.put(f)
+                write_progress_pass_done(1)
                 return
 
             from google import genai
@@ -608,6 +626,13 @@ def run_pipeline(files, ratings, regen_from):
 
             for i, f in enumerate(files, 1):
                 fname = f.name
+                if not effective_upscale(settings, options, fname):
+                    write_progress(1, "Copy (upscale off)", i, total, fname)
+                    save_img(Image.open(f).convert("RGBA"), STEP1_DIR / fname)
+                    write_progress_file_done(1, fname)
+                    q1.put(f)
+                    continue
+
                 write_progress(1, "Enhance (Gemini)", i, total, fname)
                 img = Image.open(f).convert("RGBA")
                 # aspect_ratio="1:1" restores the squared canvas (Nano Banana no
@@ -705,6 +730,12 @@ def run_pipeline(files, ratings, regen_from):
                 _drain(q125, q15)
                 return
 
+            if not any_wants_extend(settings, options, files):
+                _mark_pass_skipped(1.5, "Canvas Extend")
+                _log("PASS 1.5: Canvas extend off for all files — skipping")
+                _drain(q125, q15)
+                return
+
             if not SERVICE_ACCOUNT_PATH.exists():
                 _mark_pass_skipped(1.5, "Canvas Extend")
                 _log("PASS 1.5: No service_account.json — skipping")
@@ -742,6 +773,11 @@ def run_pipeline(files, ratings, regen_from):
                     break
                 i += 1
                 fname = f.name
+                if not effective_extend(settings, options, fname):
+                    write_progress(1.5, "Canvas Extend (off)", i, total, fname, "skipped")
+                    write_progress_file_done(1.5, fname, "skipped")
+                    q15.put(f)
+                    continue
                 s1_path = STEP1_DIR / fname
                 if not s1_path.exists():
                     write_progress(1.5, "Canvas Extend (Gemini)", i, total, fname, "skipped")
@@ -1046,6 +1082,10 @@ def main():
     file_targets = [a for a in args if not a.startswith("--") and not a.replace(".", "").isdigit()]
 
     ratings = load_ratings()
+    settings = load_settings()
+    options = load_image_options()
+    print(f"Run settings: steps={settings['steps']} bg={settings['background']} "
+          f"match={settings['bg_match_amount']}")
     prev_ratings = load_prev_ratings()
 
     extensions = {".webp", ".jpg", ".jpeg", ".png"}
@@ -1068,7 +1108,7 @@ def main():
         print(f"\nProcessing {len(files)} images.\n")
 
     # Run pipelined passes
-    run_pipeline(files, ratings, regen_from)
+    run_pipeline(files, ratings, regen_from, settings, options)
 
     # Save current ratings as prev for next run's diff
     save_prev_ratings(ratings)
