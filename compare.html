@@ -80,6 +80,11 @@ h1{text-align:center;margin-bottom:5px}
 .cn{color:#4ecca3}.cp{color:#f0a500}.cb{color:#e94560}
 .label{font-size:8px;margin-top:2px}
 .sp{display:flex;flex-direction:column;gap:3px;min-width:350px;flex-shrink:0}
+.imgopt{display:flex;gap:12px;align-items:center;font-size:10px;color:#aaa;margin-top:4px;flex-wrap:wrap}
+.imgopt label{display:inline-flex;align-items:center;gap:3px;cursor:pointer}
+.imgopt input[type="range"]{width:90px;accent-color:#4ecca3;vertical-align:middle}
+.io-match{display:inline-flex;align-items:center;gap:4px}
+#io-bmv,[id^="io-bmv-"]{width:20px;text-align:center;color:#4ecca3}
 .sr{display:flex;align-items:center;gap:5px;height:22px}
 .sl{font-size:10px;width:70px;text-align:right;color:#aaa;flex-shrink:0}
 .sv{font-size:11px;width:30px;text-align:center;font-weight:bold;flex-shrink:0}
@@ -168,6 +173,18 @@ var FILES=[];
 var ratings={};
 var SETTINGS={steps:{upscale:true,canvas_extend:true,bw:true,bg_match:true},bg_match_amount:50,background:"rainbow",custom_background:""};
 var CUSTOM_BG="";   // filename of the last uploaded custom background
+var IMG_OPTS={};        // last-saved overrides from server
+var imgOverrides={};    // live per-file overrides {name:{upscale,canvas_extend,bg_match}}
+function oio(i){
+  var n=FILES[i].name;var o=imgOverrides[n]||(imgOverrides[n]={});
+  o.upscale=document.getElementById("io-up-"+i).checked;
+  o.canvas_extend=document.getElementById("io-ce-"+i).checked;
+}
+function oioBm(i,v){
+  var n=FILES[i].name;var o=imgOverrides[n]||(imgOverrides[n]={});
+  o.bg_match=parseInt(v,10);
+  document.getElementById("io-bmv-"+i).textContent=v;
+}
 function gpv(n,k){return PREV_RATINGS[n]&&PREV_RATINGS[n][k]!==undefined?PREV_RATINGS[n][k]:0;}
 function gp(v){return((v+100)/200)*100;}
 
@@ -188,6 +205,11 @@ r.innerHTML=
 '<div class="card"><img class="img-n" src="'+NR+'/step4_rainbow/'+en(f.name)+'"><div class="label cn">BG</div></div>'+
 '</div>'+
 '<div class="sp" id="sl-'+i+'"></div>'+
+'<div class="imgopt" id="io-'+i+'">'+
+'<label><input type="checkbox" id="io-up-'+i+'" onchange="oio('+i+')"> upscale</label>'+
+'<label><input type="checkbox" id="io-ce-'+i+'" onchange="oio('+i+')"> canvas</label>'+
+'<span class="io-match"><input type="range" id="io-bm-'+i+'" min="0" max="100" step="5" oninput="oioBm('+i+',this.value)"><span id="io-bmv-'+i+'"></span></span>'+
+'</div>'+
 '</div>'+
 (PR?('<div class="rsec">'+
 '<div class="rlbl-sm cp">last ('+PR+')</div>'+
@@ -216,6 +238,48 @@ d.innerHTML='<span class="sl">'+s.label+'</span>'+
 p.appendChild(d);
 });
 });us();
+}
+
+function seedImgOpts(){
+  var g=getSettings();
+  FILES.forEach(function(f,i){
+    var ov=IMG_OPTS[f.name]||{};
+    var up=(ov.upscale!==undefined)?ov.upscale:g.steps.upscale;
+    var ce=(ov.canvas_extend!==undefined)?ov.canvas_extend:g.steps.canvas_extend;
+    var bm=(ov.bg_match!==undefined)?ov.bg_match:g.bg_match_amount;
+    document.getElementById("io-up-"+i).checked=!!up;
+    document.getElementById("io-ce-"+i).checked=!!ce;
+    document.getElementById("io-bm-"+i).value=bm;
+    document.getElementById("io-bmv-"+i).textContent=bm;
+    // seed live state from any loaded override so it persists on rerun
+    if(Object.keys(ov).length)imgOverrides[f.name]=JSON.parse(JSON.stringify(ov));
+  });
+}
+
+function getImageOptions(){
+  var g=getSettings();var out={};
+  FILES.forEach(function(f,i){
+    var o={};
+    var up=document.getElementById("io-up-"+i).checked;
+    var ce=document.getElementById("io-ce-"+i).checked;
+    var bm=parseInt(document.getElementById("io-bm-"+i).value,10);
+    if(up!==g.steps.upscale)o.upscale=up;
+    if(ce!==g.steps.canvas_extend)o.canvas_extend=ce;
+    if(bm!==g.bg_match_amount)o.bg_match=bm;
+    if(Object.keys(o).length)out[f.name]=o;
+  });
+  return out;
+}
+function getChangedTargets(){
+  var opts=getImageOptions();var t=[];
+  FILES.forEach(function(f){
+    var rNow=JSON.stringify(ratings[f.name]||{});
+    var rPrev=JSON.stringify(PREV_RATINGS[f.name]||{});
+    var oNow=JSON.stringify(opts[f.name]||{});
+    var oPrev=JSON.stringify(IMG_OPTS[f.name]||{});
+    if(rNow!==rPrev||oNow!==oPrev)t.push(f.name);
+  });
+  return t;
 }
 
 function os(i,k,v){v=parseInt(v);ratings[FILES[i].name][k]=v;var e=document.getElementById("v-"+i+"-"+k);e.textContent=v;e.className="sv "+(v<0?"neg":v>0?"pos":"zero");document.getElementById("row-"+i).className="author-row "+(SCALES.some(function(s){return ratings[FILES[i].name][s.key]!==0;})?"row-issue":"row-ok");us();as();}
@@ -281,7 +345,7 @@ function startProgressPoll(){
 // Rerun (only changed weights)
 function rerun(){
   if(!confirm("Save weights and re-run only changed images?"))return;
-  var payload=JSON.stringify({ratings:ged(),settings:getSettings()});
+  var payload=JSON.stringify({ratings:ged(),settings:getSettings(),image_options:getImageOptions(),targets:getChangedTargets()});
   fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
     .then(function(d){if(d.status==="started")startProgressPoll();})
@@ -291,7 +355,7 @@ function rerun(){
 // Regenerate all images from scratch
 function regenerate(){
   if(!confirm("Regenerate ALL images from scratch? This will re-run every pass."))return;
-  var payload=JSON.stringify({ratings:ged(),regenerate:true,settings:getSettings()});
+  var payload=JSON.stringify({ratings:ged(),regenerate:true,settings:getSettings(),image_options:getImageOptions()});
   fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
     .then(function(d){if(d.status==="started")startProgressPoll();})
@@ -305,7 +369,7 @@ function regenFrom(){
   var p=parseFloat(pass);
   if(isNaN(p)||p<1||p>4){alert("Invalid pass number");return;}
   if(!confirm("Regenerate all images from pass "+p+"?"))return;
-  var payload=JSON.stringify({ratings:ged(),regenerate:true,regen_from:p,settings:getSettings()});
+  var payload=JSON.stringify({ratings:ged(),regenerate:true,regen_from:p,settings:getSettings(),image_options:getImageOptions()});
   fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
     .then(function(d){if(d.status==="started")startProgressPoll();})
@@ -536,11 +600,13 @@ async function loadDynamic(){
   }catch(e){PREV_RATINGS={};}
 
   try{ SETTINGS=await fetch("/api/settings").then(function(r){return r.json();}); }catch(e){}
+  try{ IMG_OPTS=await fetch("/api/image_options").then(function(r){return r.json();}); if(typeof IMG_OPTS!=="object"||IMG_OPTS.done)IMG_OPTS={}; }catch(e){IMG_OPTS={};}
   wireRunCfg();
   applySettingsToPanel(SETTINGS);
 
   // Build page
   init();
+  seedImgOpts();
   checkRunning();
 
   // Restore from localStorage
