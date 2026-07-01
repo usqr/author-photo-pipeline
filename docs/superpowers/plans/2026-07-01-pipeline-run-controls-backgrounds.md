@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give the compare page whole-run and per-image control over which pipeline steps run (upscale, canvas extend, B&W, background-tone match) with a color-match slider, let the user pick one of three predefined backgrounds (rainbow / leafs / cork), show only the first and last existing version per image, and remove the top reference preview row.
+**Goal:** Give the compare page whole-run and per-image control over which pipeline steps run (upscale, canvas extend, B&W, background-tone match) with a color-match slider, let the user pick one of three predefined backgrounds (rainbow / leafs / cork) OR upload a custom background image, show only the first and last existing version per image, and remove the top reference preview row.
 
-**Architecture:** The pipeline (`rainbow_convert.py`) gains two small JSON-backed config layers — global `settings.json` (step toggles, background choice, global color-match amount) and per-image `image_options.json` (per-image upscale / canvas-extend toggles and color-match amount). Pure resolution helpers turn those into per-file decisions the pass workers consult. The LAB background-tone matching, drop shadow, and cork/leaf backgrounds come from the `feat/lab-color-match-drop-shadow` branch; the working Gemini upscale + canvas-extend come from `fix/nano-banana-upscale-extend`; both are cherry-picked onto a fresh branch off `main`. The static `compare.html` gains a global run-controls panel and per-row option controls, drops the reference row, and gates the previous/baseline thumbnails on file existence. `server.py` persists the two config files and exposes them over new GET endpoints.
+**Architecture:** The pipeline (`rainbow_convert.py`) gains two small JSON-backed config layers — global `settings.json` (step toggles, background choice, global color-match amount, optional custom-background filename) and per-image `image_options.json` (per-image upscale / canvas-extend toggles and color-match amount). Pure resolution helpers turn those into per-file decisions the pass workers consult. The LAB background-tone matching, drop shadow, and cork/leaf backgrounds come from the `feat/lab-color-match-drop-shadow` branch; the working Gemini upscale + canvas-extend come from `fix/nano-banana-upscale-extend`; both are cherry-picked onto a fresh branch off `main`. The static `compare.html` gains a global run-controls panel (including a custom-background upload) and per-row option controls, drops the reference row, and gates the previous/baseline thumbnails on file existence. `server.py` persists the two config files, accepts a base64 background upload, and exposes the config over new GET endpoints.
 
 **Tech Stack:** Python 3.10+ (Pillow, OpenCV, NumPy, rembg/BiRefNet, google-genai, CorridorKey), stdlib `http.server`, vanilla ES5 HTML/JS (no build step), pytest for unit tests.
 
@@ -12,10 +12,12 @@
 
 - **Branch:** all work happens on `feat/pipeline-run-controls-backgrounds` (already created off `main`).
 - **No new runtime dependencies** beyond what `install.sh` already installs. pytest is a dev-only tool, invoked as `python3 -m pytest`.
-- **Backgrounds are exactly three**, keyed by these exact strings and files (all already in the repo/history):
+- **Backgrounds: three predefined plus one custom slot.** The predefined keys/files (all already in the repo/history):
   - `"rainbow"` → `rainbow.png`
   - `"leafs"` → `leafs.jpeg`
   - `"cork"` → `wafle.jpg`
+  - `"custom"` → the file named by `settings.custom_background` (uploaded via the compare page, saved as `custom_bg.<ext>`). Falls back to `rainbow.png` if the custom file is absent.
+- **Upload safety:** the server accepts only `.png/.jpg/.jpeg/.webp`, sanitizes the filename to its basename (no path traversal), and stores it under `BASE_DIR`.
 - **Color-match slider is 0–100**, integer. `amount=50` MUST reproduce the previously tuned LAB strength `(0.45, 0.10, 0.10)`.
 - **Config files are optional at runtime**: missing/corrupt `settings.json` or `image_options.json` fall back to defaults without raising.
 - **Default settings**: all four steps ON, `bg_match_amount = 50`, `background = "rainbow"`.
@@ -33,7 +35,8 @@
 | `image_options.json` | Per-image overrides. Created on first save; `{}` default. | Create (default committed) |
 | `server.py` | Persist `settings.json` + `image_options.json` from rerun payload; expose `/api/settings` and `/api/image_options`; accept explicit `targets` list. | Modify |
 | `compare.html` | Remove reference row; global run-controls panel; per-row option controls; existence-gated first/last thumbnails; send settings + options + targets in rerun payloads. | Modify |
-| `leafs.jpeg`, `wafle.jpg`, `rainbow.png` | The three background images. | Recover / import / keep |
+| `leafs.jpeg`, `wafle.jpg`, `rainbow.png` | The three predefined background images. | Recover / import / keep |
+| `custom_bg.<ext>` | Optional user-uploaded background (written by the server at runtime; gitignored). | Runtime only |
 | `tests/test_pipeline_config.py` | Unit tests for the pure config/resolution helpers. | Create |
 | `tests/test_pipeline_color.py` | Unit tests for `bg_match_strength`, `match_histogram`, `compute_ref_stats`, `background_path`. | Create |
 | `AGENTS.md`, `CLAUDE.md` | Document the new controls, backgrounds, and config files. | Modify |
@@ -54,6 +57,7 @@ DEFAULT_SETTINGS = {
     "steps": {"upscale": True, "canvas_extend": True, "bw": True, "bg_match": True},
     "bg_match_amount": 50,
     "background": "rainbow",
+    "custom_background": "",
 }
 ```
 
@@ -68,13 +72,14 @@ def effective_upscale(settings: dict, options: dict, fname: str) -> bool
 def effective_extend(settings: dict, options: dict, fname: str) -> bool
 def effective_bg_match_amount(settings: dict, options: dict, fname: str) -> int   # 0 when step off
 def bg_match_strength(amount) -> tuple[float, float, float]  # (L,a,b); 50 → (0.45,0.10,0.10)
-def background_path(settings: dict) -> Path                  # falls back to rainbow.png
+def background_path(settings: dict) -> Path                  # "custom" → sanitized custom_background; falls back to rainbow.png
 ```
 
 Server HTTP contract:
 - `GET /api/settings` → JSON of `settings.json` (or `{}` if absent).
 - `GET /api/image_options` → JSON of `image_options.json` (or `{}`).
-- `POST /api/rerun` body may now include `settings` (dict), `image_options` (dict), `targets` (list of filenames). Server writes the two config files (when present) before launching, and passes `targets` as CLI args to `rainbow_convert.py`.
+- `POST /api/rerun` body may now include `settings` (dict, may carry `background:"custom"` + `custom_background`), `image_options` (dict), `targets` (list of filenames). Server writes the two config files (when present) before launching, and passes `targets` as CLI args to `rainbow_convert.py`.
+- `POST /api/upload_bg` body `{filename, data_base64}` → saves the decoded image as `custom_bg.<ext>` (extension whitelist + basename sanitized) and returns `{"saved": "<name>"}` (empty on rejection).
 
 ---
 
@@ -262,6 +267,32 @@ def test_background_path(monkeypatch, tmp_path):
     assert rc.background_path({"background": "leafs"}) == rc.BG_PATHS["leafs"]
     assert rc.background_path({"background": "???"}) == rc.BG_PATHS["rainbow"]
     assert rc.background_path({}) == rc.BG_PATHS["rainbow"]
+
+
+def test_background_path_custom(tmp_path, monkeypatch):
+    monkeypatch.setattr(rc, "BASE_DIR", tmp_path)
+    # custom file present → returned
+    (tmp_path / "custom_bg.png").write_bytes(b"x")
+    assert rc.background_path(
+        {"background": "custom", "custom_background": "custom_bg.png"}
+    ) == tmp_path / "custom_bg.png"
+    # custom selected but file missing → rainbow fallback
+    assert rc.background_path(
+        {"background": "custom", "custom_background": "gone.png"}
+    ) == rc.BG_PATHS["rainbow"]
+    # path traversal is stripped to basename (and then missing → fallback)
+    assert rc.background_path(
+        {"background": "custom", "custom_background": "../../etc/passwd"}
+    ) == rc.BG_PATHS["rainbow"]
+
+
+def test_load_settings_custom_background(tmp_path, monkeypatch):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"background": "custom", "custom_background": "custom_bg.jpg"}))
+    monkeypatch.setattr(rc, "SETTINGS_PATH", p)
+    s = rc.load_settings()
+    assert s["background"] == "custom"
+    assert s["custom_background"] == "custom_bg.jpg"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -287,6 +318,7 @@ DEFAULT_SETTINGS = {
     "steps": {"upscale": True, "canvas_extend": True, "bw": True, "bg_match": True},
     "bg_match_amount": 50,
     "background": "rainbow",
+    "custom_background": "",
 }
 ```
 
@@ -309,6 +341,7 @@ def load_settings():
         "steps": dict(DEFAULT_SETTINGS["steps"]),
         "bg_match_amount": DEFAULT_SETTINGS["bg_match_amount"],
         "background": DEFAULT_SETTINGS["background"],
+        "custom_background": DEFAULT_SETTINGS["custom_background"],
     }
     if SETTINGS_PATH.exists():
         try:
@@ -321,8 +354,10 @@ def load_settings():
                     s["steps"][k] = bool(data["steps"][k])
         if "bg_match_amount" in data:
             s["bg_match_amount"] = clamp_amount(data["bg_match_amount"])
-        if data.get("background") in BG_PATHS:
+        if data.get("background") in BG_PATHS or data.get("background") == "custom":
             s["background"] = data["background"]
+        if isinstance(data.get("custom_background"), str):
+            s["custom_background"] = data["custom_background"]
     return s
 
 
@@ -364,6 +399,13 @@ def effective_bg_match_amount(settings, options, fname):
 
 
 def background_path(settings):
+    if settings.get("background") == "custom":
+        name = Path(settings.get("custom_background") or "").name  # strip any directory
+        if name:
+            p = BASE_DIR / name
+            if p.exists():
+                return p
+        return BG_PATHS["rainbow"]
     return BG_PATHS.get(settings.get("background"), BG_PATHS["rainbow"])
 ```
 
@@ -379,16 +421,21 @@ Create `settings.json`:
 {
   "steps": {"upscale": true, "canvas_extend": true, "bw": true, "bg_match": true},
   "bg_match_amount": 50,
-  "background": "rainbow"
+  "background": "rainbow",
+  "custom_background": ""
 }
 ```
 Create `image_options.json`:
 ```json
 {}
 ```
+Add a line to `.gitignore` so uploaded custom backgrounds aren't committed:
+```
+custom_bg.*
+```
 Then:
 ```bash
-git add rainbow_convert.py tests/test_pipeline_config.py settings.json image_options.json
+git add rainbow_convert.py tests/test_pipeline_config.py settings.json image_options.json .gitignore
 git commit -m "feat: add run settings + per-image option config model with resolution helpers"
 ```
 
@@ -763,7 +810,38 @@ In the same branch, after the `if data.get("regen_from"):` block that extends `c
 ```
 (Regenerate-all ignores targets by design; `main()` treats trailing non-flag args as file targets.)
 
-- [ ] **Step 4: Manual verification — endpoints and persistence**
+- [ ] **Step 4: Add the custom-background upload endpoint**
+
+Add a new branch in `do_POST` (e.g. right before the `elif self.path == "/api/stop":` branch):
+
+```python
+        elif self.path == "/api/upload_bg":
+            import json as jmod, base64
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len).decode()
+            try:
+                data = jmod.loads(body)
+            except Exception:
+                data = {}
+            ext = Path(str(data.get("filename", ""))).suffix.lower()
+            b64 = data.get("data_base64", "")
+            saved = ""
+            if ext in (".png", ".jpg", ".jpeg", ".webp") and b64:
+                try:
+                    raw = base64.b64decode(str(b64).split(",")[-1])
+                    saved = "custom_bg" + ext
+                    (BASE / saved).write_bytes(raw)
+                except Exception:
+                    saved = ""
+            self.send_response(200 if saved else 400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(jmod.dumps({"saved": saved}).encode())
+```
+(`data_base64` may be a full data URL — `data:image/png;base64,XXXX` — so we split on `,` and decode the tail.)
+
+- [ ] **Step 5: Manual verification — endpoints and persistence**
 
 Start the server, then in another shell exercise the endpoints:
 ```bash
@@ -778,11 +856,27 @@ pkill -f server.py
 ```
 Expected: `settings.json` shows `bw:false`, `background:"cork"`, `bg_match_amount:70`; `image_options.json` shows `{"anna.jpg": {"upscale": false}}`. (This will kick off a pipeline run writing to `pipeline.log`; that is fine — you can `pkill -f rainbow_convert.py` to stop it.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Manual verification — upload endpoint**
+
+With the server running, upload a tiny PNG as a custom background and confirm it lands on disk:
+```bash
+python3 server.py & sleep 1
+B64=$(python3 -c "import base64,io; from PIL import Image; b=io.BytesIO(); Image.new('RGB',(8,8),(10,20,30)).save(b,'PNG'); print(base64.b64encode(b.getvalue()).decode())")
+curl -s -X POST localhost:8787/api/upload_bg -H 'Content-Type: application/json' \
+  -d "{\"filename\":\"my bg.png\",\"data_base64\":\"$B64\"}"
+ls -la custom_bg.png
+# reject a disallowed extension
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8787/api/upload_bg -H 'Content-Type: application/json' \
+  -d '{"filename":"evil.svg","data_base64":"'"$B64"'"}'
+pkill -f server.py; rm -f custom_bg.png
+```
+Expected: first call returns `{"saved":"custom_bg.png"}` and `custom_bg.png` exists; the `.svg` call returns HTTP `400`.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add server.py
-git commit -m "feat(server): persist settings + image options, expose GET endpoints, accept targets"
+git commit -m "feat(server): persist config, expose GET endpoints, accept targets, upload custom bg"
 ```
 
 ---
@@ -891,6 +985,8 @@ Immediately after the `<div class="controls">…</div>` block (before `<div clas
     <label><input type="radio" name="bgsel" value="rainbow" checked> Rainbow</label>
     <label><input type="radio" name="bgsel" value="leafs"> Leafs</label>
     <label><input type="radio" name="bgsel" value="cork"> Cork</label>
+    <label><input type="radio" name="bgsel" value="custom"> Custom</label>
+    <input type="file" id="bg-custom-file" accept="image/png,image/jpeg,image/webp" style="font-size:11px;max-width:160px">
   </div>
 </div>
 ```
@@ -911,7 +1007,8 @@ In the `<style>` block, add:
 
 In the `<script>`, near the other globals, add:
 ```javascript
-var SETTINGS={steps:{upscale:true,canvas_extend:true,bw:true,bg_match:true},bg_match_amount:50,background:"rainbow"};
+var SETTINGS={steps:{upscale:true,canvas_extend:true,bw:true,bg_match:true},bg_match_amount:50,background:"rainbow",custom_background:""};
+var CUSTOM_BG="";   // filename of the last uploaded custom background
 ```
 Add helper functions:
 ```javascript
@@ -925,7 +1022,8 @@ function getSettings(){
       bg_match:document.getElementById("st-bg_match").checked
     },
     bg_match_amount:parseInt(document.getElementById("bg-match-amount").value,10),
-    background:bg};
+    background:bg,
+    custom_background:CUSTOM_BG};
 }
 function applySettingsToPanel(s){
   if(!s||!s.steps)return;
@@ -936,12 +1034,32 @@ function applySettingsToPanel(s){
   var amt=(s.bg_match_amount!==undefined)?s.bg_match_amount:50;
   document.getElementById("bg-match-amount").value=amt;
   document.getElementById("bg-match-val").textContent=amt;
+  CUSTOM_BG=s.custom_background||"";
   var rs=document.getElementsByName("bgsel");
   for(var i=0;i<rs.length;i++){rs[i].checked=(rs[i].value===(s.background||"rainbow"));}
 }
 function wireRunCfg(){
   var sl=document.getElementById("bg-match-amount");
   sl.addEventListener("input",function(){document.getElementById("bg-match-val").textContent=sl.value;});
+  var cf=document.getElementById("bg-custom-file");
+  cf.addEventListener("change",function(){
+    var file=cf.files[0];if(!file)return;
+    var rd=new FileReader();
+    rd.onload=function(){
+      fetch("/api/upload_bg",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({filename:file.name,data_base64:rd.result})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d&&d.saved){
+          CUSTOM_BG=d.saved;
+          var rs=document.getElementsByName("bgsel");
+          for(var i=0;i<rs.length;i++){rs[i].checked=(rs[i].value==="custom");}
+          alert("Custom background uploaded: "+d.saved);
+        }else{alert("Upload failed — use a PNG/JPG/WEBP image.");}
+      }).catch(function(e){alert("Upload error: "+e);});
+    };
+    rd.readAsDataURL(file);
+  });
 }
 ```
 
@@ -974,11 +1092,12 @@ var PASS_NAMES={"1":"Upscale/Copy","1.5":"Canvas Extend","2":"BG Remove","3":"Ad
 ```bash
 python3 server.py & sleep 1
 ```
-Open the compare page. Toggle "Convert to B&W" off, set Background = Cork, drag the colour-match slider to 70 (readout updates). Click **Regenerate All** → accept. In a second shell:
+Open the compare page. Toggle "Convert to B&W" off, set Background = Cork, drag the colour-match slider to 70 (readout updates). Then choose a local image with the **Custom** file picker → an alert confirms the upload and the Custom radio auto-selects. Click **Regenerate All** → accept. In a second shell:
 ```bash
 cat settings.json
+ls -la custom_bg.*
 ```
-Expected: `{"steps":{...,"bw":false},"bg_match_amount":70,"background":"cork"}`. Stop with `pkill -f rainbow_convert.py; pkill -f server.py` (you need not wait for the full run).
+Expected: `settings.json` shows `"bw":false`, `"bg_match_amount":70`, `"background":"custom"`, `"custom_background":"custom_bg.<ext>"`; the `custom_bg.<ext>` file exists. Stop with `pkill -f rainbow_convert.py; pkill -f server.py` (you need not wait for the full run).
 
 - [ ] **Step 8: Commit**
 
@@ -1142,7 +1261,7 @@ git commit -m "feat(compare): per-image upscale/canvas toggles and colour-match 
 
 - [ ] **Step 1: Update `AGENTS.md`**
 
-In the "Pipeline Steps" and "Compare Page" sections, document: (a) Pass 3 B&W is now a toggle (`settings.steps.bw`); Pass 4 composites the chosen background (`rainbow`/`leafs`/`cork`) with per-file LAB colour matching; (b) the new `settings.json` and `image_options.json` config files and their schema; (c) the compare-page global run-controls panel and per-image controls; (d) the reference row was removed and only the first/last existing versions are shown. Add `settings.json`, `image_options.json`, `leafs.jpeg`, `wafle.jpg` to the Key Files table.
+In the "Pipeline Steps" and "Compare Page" sections, document: (a) Pass 3 B&W is now a toggle (`settings.steps.bw`); Pass 4 composites the chosen background (`rainbow`/`leafs`/`cork`, or a user-uploaded `custom` image) with per-file LAB colour matching; (b) the new `settings.json` (including `background` + `custom_background`) and `image_options.json` config files and their schema; (c) the compare-page global run-controls panel (with the custom-background upload) and per-image controls; (d) the reference row was removed and only the first/last existing versions are shown. Add `settings.json`, `image_options.json`, `leafs.jpeg`, `wafle.jpg` to the Key Files table.
 
 - [ ] **Step 2: Update `CLAUDE.md` quick reference**
 
@@ -1191,6 +1310,7 @@ git push -u origin feat/pipeline-run-controls-backgrounds
 - "per-image checkboxes: upscaling, canvas extension, slider for bg colour match amount" → Task 8 (per-row controls) + Tasks 3–4 (per-file resolution) + Task 5 (persist/targets).
 - "remove the preview row of the target images" → Task 6, Step 1–2 (top Reference row removed).
 - "3 predefined backgrounds (rainbow, leafs, cork)" → Task 1 (assets recovered/imported) + Task 4 (`background_path`) + Task 7 (radios). Note: the compare page's old "Leafs" label pointed at the cork image; corrected here so `leafs` = `leafs.jpeg` (foliage) and `cork` = `wafle.jpg` (cork/waffle texture).
+- "custom background, not only the 3 predefined ones" → Task 2 (`custom_background` in settings + `background_path` "custom" branch with basename sanitize/fallback) + Task 5 (`/api/upload_bg` with extension whitelist) + Task 7 (Custom radio + file picker + upload). Uploaded file saved as `custom_bg.<ext>` (gitignored).
 
 **Placeholder scan:** No TBD/"handle edge cases"/"write tests for the above" — every code step shows the code; every test step shows the test.
 
