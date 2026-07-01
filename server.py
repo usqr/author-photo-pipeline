@@ -39,6 +39,10 @@ class PipelineHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json_file(BASE / "ratings.json")
         elif self.path == "/api/progress_log":
             self.send_json_file(BASE / "progress_log.json")
+        elif self.path == "/api/settings":
+            self.send_json_file(BASE / "settings.json")
+        elif self.path == "/api/image_options":
+            self.send_json_file(BASE / "image_options.json")
         else:
             super().do_GET()
 
@@ -65,6 +69,14 @@ class PipelineHandler(http.server.SimpleHTTPRequestHandler):
             if ratings_data and isinstance(next(iter(ratings_data.values()), None), dict):
                 ratings_path.write_text(jmod.dumps(ratings_data, indent=2))
 
+            # Persist global run settings and per-image options
+            settings_data = data.get("settings")
+            if isinstance(settings_data, dict):
+                (BASE / "settings.json").write_text(jmod.dumps(settings_data, indent=2))
+            options_data = data.get("image_options")
+            if isinstance(options_data, dict):
+                (BASE / "image_options.json").write_text(jmod.dumps(options_data, indent=2))
+
             # Clear progress
             (BASE / "progress.json").write_text('{"done":false,"pass":0,"pass_name":"Starting...","current":0,"total":0,"filename":""}')
             (BASE / "progress_log.json").write_text('{}')
@@ -75,6 +87,10 @@ class PipelineHandler(http.server.SimpleHTTPRequestHandler):
                 cmd.append("--regenerate")
             if data.get("regen_from"):
                 cmd.extend(["--regen-from", str(data["regen_from"])])
+
+            targets = data.get("targets")
+            if isinstance(targets, list) and not data.get("regenerate"):
+                cmd.extend([str(t) for t in targets])
 
             # Run pipeline in background
             subprocess.Popen(
@@ -88,6 +104,30 @@ class PipelineHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b'{"status":"started"}')
+
+        elif self.path == "/api/upload_bg":
+            import json as jmod, base64
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len).decode()
+            try:
+                data = jmod.loads(body)
+            except Exception:
+                data = {}
+            ext = Path(str(data.get("filename", ""))).suffix.lower()
+            b64 = data.get("data_base64", "")
+            saved = ""
+            if ext in (".png", ".jpg", ".jpeg", ".webp") and b64:
+                try:
+                    raw = base64.b64decode(str(b64).split(",")[-1])
+                    saved = "custom_bg" + ext
+                    (BASE / saved).write_bytes(raw)
+                except Exception:
+                    saved = ""
+            self.send_response(200 if saved else 400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(jmod.dumps({"saved": saved}).encode())
 
         elif self.path == "/api/stop":
             self.send_response(200)

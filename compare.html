@@ -53,6 +53,11 @@ h1{text-align:center;margin-bottom:5px}
 .btn-rerun:hover{background:#0a5a0a!important}
 .btn-stop{background:#3a0a0a!important;border-color:#e94560!important;color:#e94560!important}
 .btn-stop:hover{background:#5a0a0a!important}
+.runcfg{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;align-items:center;background:#16213e;border:1px solid #333;border-radius:8px;padding:10px 16px;margin:0 auto 15px;max-width:900px;font-size:12px}
+.runcfg label{display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+.runcfg-match,.runcfg-bg,.runcfg-steps{display:flex;align-items:center;gap:8px}
+.runcfg input[type="range"]{width:120px;accent-color:#4ecca3}
+#bg-match-val{width:24px;text-align:center;color:#4ecca3;font-weight:bold}
 .filter-bar{display:flex;justify-content:center;gap:8px;margin-bottom:15px}
 .badge{padding:4px 10px;border-radius:12px;font-size:11px;cursor:pointer;border:1px solid #333}
 .badge:hover{border-color:#888}
@@ -66,6 +71,7 @@ h1{text-align:center;margin-bottom:5px}
 .author-images .card{text-align:center;flex-shrink:0}
 .img-n{width:110px;height:110px;object-fit:cover;border-radius:8px;border:2px solid #4ecca3;transition:transform .2s}
 .img-n:hover{transform:scale(3.5);position:relative;z-index:100}
+.card-ph{width:110px;height:110px;box-sizing:border-box;border-radius:8px;background:#0e1430;border:2px dashed #40406a;display:flex;align-items:center;justify-content:center;color:#666;font-size:9px;text-align:center;padding:4px}
 .img-p{width:65px;height:65px;object-fit:cover;border-radius:6px;border:2px solid #f0a500;opacity:.9;transition:transform .2s}
 .img-p:hover{transform:scale(4);position:relative;z-index:100;opacity:1}
 .img-b{width:65px;height:65px;object-fit:cover;border-radius:6px;border:2px solid #e94560;opacity:.85;transition:transform .2s}
@@ -75,6 +81,11 @@ h1{text-align:center;margin-bottom:5px}
 .cn{color:#4ecca3}.cp{color:#f0a500}.cb{color:#e94560}
 .label{font-size:8px;margin-top:2px}
 .sp{display:flex;flex-direction:column;gap:3px;min-width:350px;flex-shrink:0}
+.imgopt{display:flex;gap:12px;align-items:center;font-size:10px;color:#aaa;margin-top:4px;flex-wrap:wrap}
+.imgopt label{display:inline-flex;align-items:center;gap:3px;cursor:pointer}
+.imgopt input[type="range"]{width:90px;accent-color:#4ecca3;vertical-align:middle}
+.io-match{display:inline-flex;align-items:center;gap:4px}
+#io-bmv,[id^="io-bmv-"]{width:20px;text-align:center;color:#4ecca3}
 .sr{display:flex;align-items:center;gap:5px;height:22px}
 .sl{font-size:10px;width:70px;text-align:right;color:#aaa;flex-shrink:0}
 .sv{font-size:11px;width:30px;text-align:center;font-weight:bold;flex-shrink:0}
@@ -117,14 +128,33 @@ h2{margin-top:25px;font-size:16px}
 <button class="btn-stop" onclick="endAll()">End All</button>
 <span style="color:#888;font-size:11px;padding-top:8px" id="stats"></span>
 </div>
+<div class="runcfg" id="runcfg">
+  <div class="runcfg-steps">
+    <label><input type="checkbox" id="st-upscale" checked> Upscale</label>
+    <label><input type="checkbox" id="st-canvas_extend" checked> Canvas extend</label>
+    <label><input type="checkbox" id="st-bw" checked> Convert to B&amp;W</label>
+    <label><input type="checkbox" id="st-bg_match" checked> Match background tone</label>
+  </div>
+  <div class="runcfg-match">
+    <span>Colour match</span>
+    <input type="range" id="bg-match-amount" min="0" max="100" step="5" value="50">
+    <span id="bg-match-val">50</span>
+  </div>
+  <div class="runcfg-bg">
+    <span>Background:</span>
+    <label><input type="radio" name="bgsel" value="rainbow" checked> Rainbow</label>
+    <label><input type="radio" name="bgsel" value="leafs"> Leafs</label>
+    <label><input type="radio" name="bgsel" value="cork"> Cork</label>
+    <label><input type="radio" name="bgsel" value="custom"> Custom</label>
+    <input type="file" id="bg-custom-file" accept="image/png,image/jpeg,image/webp" style="font-size:11px;max-width:160px">
+  </div>
+</div>
 <div class="filter-bar">
 <span class="badge" style="background:#16213e;color:#eee" onclick="filterRows('all')" id="badge-all">All</span>
 <span class="badge" style="background:#3a1a1a;color:#e94560" onclick="filterRows('issues')" id="badge-issues">Issues</span>
 <span class="badge" style="background:#1a3a2a;color:#4ecca3" onclick="filterRows('ok')" id="badge-ok">OK</span>
 <span class="badge" style="background:#3a2a00;color:#f0a500" onclick="filterRows('changed')" id="badge-changed">Changed</span>
 </div>
-<h2>Reference</h2>
-<div class="ref-row" id="ref-row"></div>
 <h2>All Authors</h2>
 <div id="grid"></div>
 <div class="export-area">
@@ -142,6 +172,22 @@ var SCALES=[
 ];
 var FILES=[];
 var ratings={};
+var DEFAULT_SETTINGS={steps:{upscale:true,canvas_extend:true,bw:true,bg_match:true},bg_match_amount:50,background:"rainbow",custom_background:""};
+var SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+var LOADED_SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));   // snapshot of settings at page load, for global-change detection
+var CUSTOM_BG="";   // filename of the last uploaded custom background
+var IMG_OPTS={};        // last-saved overrides from server
+var imgOverrides={};    // live per-file overrides {name:{upscale,canvas_extend,bg_match}}
+function oio(i){
+  var n=FILES[i].name;var o=imgOverrides[n]||(imgOverrides[n]={});
+  o.upscale=document.getElementById("io-up-"+i).checked;
+  o.canvas_extend=document.getElementById("io-ce-"+i).checked;
+}
+function oioBm(i,v){
+  var n=FILES[i].name;var o=imgOverrides[n]||(imgOverrides[n]={});
+  o.bg_match=parseInt(v,10);
+  document.getElementById("io-bmv-"+i).textContent=v;
+}
 function gpv(n,k){return PREV_RATINGS[n]&&PREV_RATINGS[n][k]!==undefined?PREV_RATINGS[n][k]:0;}
 function gp(v){return((v+100)/200)*100;}
 
@@ -158,23 +204,28 @@ r.innerHTML=
 '<div class="rlbl">'+f.name+'</div>'+
 '<div class="author-images">'+
 '<div class="card"><img class="img-n" src="webp/'+en(f.name)+'"><div class="label cn">Original</div></div>'+
-'<div class="card"><img class="img-n" src="'+NR+'/step3_bw/'+en(f.stem)+'.png"><div class="label cn">B&W</div></div>'+
-'<div class="card"><img class="img-n" src="'+NR+'/step4_rainbow/'+en(f.name)+'"><div class="label cn">Rainbow</div></div>'+
+'<div class="card"><img class="img-n" src="'+NR+'/step3_bw/'+en(f.stem)+'.png" onerror="this.onerror=null;var p=document.createElement(\'div\');p.className=\'card-ph\';p.textContent=\'no output yet\';this.replaceWith(p)"><div class="label cn">Adjust</div></div>'+
+'<div class="card"><img class="img-n" src="'+NR+'/step4_rainbow/'+en(f.name)+'" onerror="this.onerror=null;var p=document.createElement(\'div\');p.className=\'card-ph\';p.textContent=\'no output yet\';this.replaceWith(p)"><div class="label cn">BG</div></div>'+
 '</div>'+
 '<div class="sp" id="sl-'+i+'"></div>'+
+'<div class="imgopt" id="io-'+i+'">'+
+'<label><input type="checkbox" id="io-up-'+i+'" onchange="oio('+i+')"> upscale</label>'+
+'<label><input type="checkbox" id="io-ce-'+i+'" onchange="oio('+i+')"> canvas</label>'+
+'<span class="io-match"><input type="range" id="io-bm-'+i+'" min="0" max="100" step="5" oninput="oioBm('+i+',this.value)"><span id="io-bmv-'+i+'"></span></span>'+
 '</div>'+
-'<div class="rsec">'+
-'<div class="rlbl-sm cp">prev</div>'+
+'</div>'+
+(PR?('<div class="rsec">'+
+'<div class="rlbl-sm cp">last ('+PR+')</div>'+
 '<div class="author-images">'+
-'<div class="card"><img class="img-p" src="'+PR+'/step3_bw/'+en(f.stem)+'.png"><div class="label cp">B&W</div></div>'+
-'<div class="card"><img class="img-p" src="'+PR+'/step4_rainbow/'+en(f.name)+'"><div class="label cp">Rainbow</div></div>'+
+'<div class="card"><img class="img-p" src="'+PR+'/step3_bw/'+en(f.stem)+'.png" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cp">Adjust</div></div>'+
+'<div class="card"><img class="img-p" src="'+PR+'/step4_rainbow/'+en(f.name)+'" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cp">BG</div></div>'+
 '</div>'+
-'</div>'+
+'</div>'):'')+
 '<div class="rsec">'+
-'<div class="rlbl-sm cb">baseline</div>'+
+'<div class="rlbl-sm cb">first (baseline)</div>'+
 '<div class="author-images">'+
-'<div class="card"><img class="img-b" src="baseline_bw/'+en(f.stem)+'.png"><div class="label cb">B&W</div></div>'+
-'<div class="card"><img class="img-b" src="baseline_rainbow/'+en(f.name)+'"><div class="label cb">Rainbow</div></div>'+
+'<div class="card"><img class="img-b" src="baseline_bw/'+en(f.stem)+'.png" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cb">Adjust</div></div>'+
+'<div class="card"><img class="img-b" src="baseline_rainbow/'+en(f.name)+'" onerror="this.closest(\'.card\').style.display=\'none\'"><div class="label cb">BG</div></div>'+
 '</div>'+
 '</div>';
 g.appendChild(r);
@@ -190,6 +241,48 @@ d.innerHTML='<span class="sl">'+s.label+'</span>'+
 p.appendChild(d);
 });
 });us();
+}
+
+function seedImgOpts(){
+  var g=getSettings();
+  FILES.forEach(function(f,i){
+    var ov=IMG_OPTS[f.name]||{};
+    var up=(ov.upscale!==undefined)?ov.upscale:g.steps.upscale;
+    var ce=(ov.canvas_extend!==undefined)?ov.canvas_extend:g.steps.canvas_extend;
+    var bm=(ov.bg_match!==undefined)?ov.bg_match:g.bg_match_amount;
+    document.getElementById("io-up-"+i).checked=!!up;
+    document.getElementById("io-ce-"+i).checked=!!ce;
+    document.getElementById("io-bm-"+i).value=bm;
+    document.getElementById("io-bmv-"+i).textContent=bm;
+    // seed live state from any loaded override so it persists on rerun
+    if(Object.keys(ov).length)imgOverrides[f.name]=JSON.parse(JSON.stringify(ov));
+  });
+}
+
+function getImageOptions(){
+  var g=getSettings();var out={};
+  FILES.forEach(function(f,i){
+    var o={};
+    var up=document.getElementById("io-up-"+i).checked;
+    var ce=document.getElementById("io-ce-"+i).checked;
+    var bm=parseInt(document.getElementById("io-bm-"+i).value,10);
+    if(up!==g.steps.upscale)o.upscale=up;
+    if(ce!==g.steps.canvas_extend)o.canvas_extend=ce;
+    if(bm!==g.bg_match_amount)o.bg_match=bm;
+    if(Object.keys(o).length)out[f.name]=o;
+  });
+  return out;
+}
+function getChangedTargets(){
+  var opts=getImageOptions();var t=[];
+  FILES.forEach(function(f){
+    var rNow=JSON.stringify(ratings[f.name]||{});
+    var rPrev=JSON.stringify(PREV_RATINGS[f.name]||{});
+    var oNow=JSON.stringify(opts[f.name]||{});
+    var oPrev=JSON.stringify(IMG_OPTS[f.name]||{});
+    if(rNow!==rPrev||oNow!==oPrev)t.push(f.name);
+  });
+  return t;
 }
 
 function os(i,k,v){v=parseInt(v);ratings[FILES[i].name][k]=v;var e=document.getElementById("v-"+i+"-"+k);e.textContent=v;e.className="sv "+(v<0?"neg":v>0?"pos":"zero");document.getElementById("row-"+i).className="author-row "+(SCALES.some(function(s){return ratings[FILES[i].name][s.key]!==0;})?"row-issue":"row-ok");us();as();}
@@ -252,10 +345,21 @@ function startProgressPoll(){
   },2000);
 }
 
+// True when any global setting (background, colour-match amount, steps) changed since load
+function globalSettingsChanged(){
+  return JSON.stringify(getSettings())!==JSON.stringify(LOADED_SETTINGS);
+}
+
 // Rerun (only changed weights)
 function rerun(){
   if(!confirm("Save weights and re-run only changed images?"))return;
-  var payload=JSON.stringify({ratings:ged()});
+  var payload;
+  if(globalSettingsChanged()){
+    // A global setting changed — full re-run so every image recomposites
+    payload=JSON.stringify({ratings:ged(),settings:getSettings(),image_options:getImageOptions(),regenerate:true});
+  }else{
+    payload=JSON.stringify({ratings:ged(),settings:getSettings(),image_options:getImageOptions(),targets:getChangedTargets()});
+  }
   fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
     .then(function(d){if(d.status==="started")startProgressPoll();})
@@ -265,7 +369,7 @@ function rerun(){
 // Regenerate all images from scratch
 function regenerate(){
   if(!confirm("Regenerate ALL images from scratch? This will re-run every pass."))return;
-  var payload=JSON.stringify({ratings:ged(),regenerate:true});
+  var payload=JSON.stringify({ratings:ged(),regenerate:true,settings:getSettings(),image_options:getImageOptions()});
   fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
     .then(function(d){if(d.status==="started")startProgressPoll();})
@@ -274,12 +378,12 @@ function regenerate(){
 
 // Regenerate from a specific pass (reuse earlier outputs)
 function regenFrom(){
-  var pass=prompt("Regenerate from which pass?\\n\\n1 = Upscale (Gemini)\\n1.5 = Canvas extend (Gemini)\\n2 = Background removal\\n3 = B&W conversion\\n4 = Rainbow composite","3");
+  var pass=prompt("Regenerate from which pass?\\n\\n1 = Upscale (Gemini)\\n1.25 = Green background\\n1.5 = Canvas extend (Gemini)\\n2 = Green screen keying\\n3 = Color adjustments\\n4 = Background composite","3");
   if(!pass)return;
   var p=parseFloat(pass);
   if(isNaN(p)||p<1||p>4){alert("Invalid pass number");return;}
   if(!confirm("Regenerate all images from pass "+p+"?"))return;
-  var payload=JSON.stringify({ratings:ged(),regenerate:true,regen_from:p});
+  var payload=JSON.stringify({ratings:ged(),regenerate:true,regen_from:p,settings:getSettings(),image_options:getImageOptions()});
   fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
     .then(function(d){if(d.status==="started")startProgressPoll();})
@@ -294,9 +398,60 @@ function endAll(){
     .catch(function(){window.close();});
 }
 
+// Run-config panel (steps, colour match, background)
+function getSettings(){
+  var bg="rainbow";var rs=document.getElementsByName("bgsel");
+  for(var i=0;i<rs.length;i++){if(rs[i].checked)bg=rs[i].value;}
+  return {steps:{
+      upscale:document.getElementById("st-upscale").checked,
+      canvas_extend:document.getElementById("st-canvas_extend").checked,
+      bw:document.getElementById("st-bw").checked,
+      bg_match:document.getElementById("st-bg_match").checked
+    },
+    bg_match_amount:parseInt(document.getElementById("bg-match-amount").value,10),
+    background:bg,
+    custom_background:CUSTOM_BG};
+}
+function applySettingsToPanel(s){
+  if(!s||!s.steps)return;
+  document.getElementById("st-upscale").checked=!!s.steps.upscale;
+  document.getElementById("st-canvas_extend").checked=!!s.steps.canvas_extend;
+  document.getElementById("st-bw").checked=!!s.steps.bw;
+  document.getElementById("st-bg_match").checked=!!s.steps.bg_match;
+  var amt=(s.bg_match_amount!==undefined)?s.bg_match_amount:50;
+  document.getElementById("bg-match-amount").value=amt;
+  document.getElementById("bg-match-val").textContent=amt;
+  CUSTOM_BG=s.custom_background||"";
+  var rs=document.getElementsByName("bgsel");
+  for(var i=0;i<rs.length;i++){rs[i].checked=(rs[i].value===(s.background||"rainbow"));}
+}
+function wireRunCfg(){
+  var sl=document.getElementById("bg-match-amount");
+  sl.addEventListener("input",function(){document.getElementById("bg-match-val").textContent=sl.value;});
+  var cf=document.getElementById("bg-custom-file");
+  cf.addEventListener("change",function(){
+    var file=cf.files[0];if(!file)return;
+    var rd=new FileReader();
+    rd.onload=function(){
+      fetch("/api/upload_bg",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({filename:file.name,data_base64:rd.result})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d&&d.saved){
+          CUSTOM_BG=d.saved;
+          var rs=document.getElementsByName("bgsel");
+          for(var i=0;i<rs.length;i++){rs[i].checked=(rs[i].value==="custom");}
+          alert("Custom background uploaded: "+d.saved);
+        }else{alert("Upload failed — use a PNG/JPG/WEBP image.");}
+      }).catch(function(e){alert("Upload error: "+e);});
+    };
+    rd.readAsDataURL(file);
+  });
+}
+
 // Accordion details
-var PASS_ORDER=["1","1.5","2","3","4"];
-var PASS_NAMES={"1":"Upscale/Copy","1.5":"Canvas Extend","2":"BG Remove","3":"B&W","4":"Rainbow"};
+var PASS_ORDER=["1","1.25","1.5","2","3","4"];
+var PASS_NAMES={"1":"Upscale/Copy","1.25":"Green BG","1.5":"Canvas Extend","2":"BG Remove","3":"Adjust/B&W","4":"Background"};
 var detailsOpen=false;
 var openPasses={};
 var detailsBuilt=false;
@@ -435,18 +590,6 @@ function checkRunning(){
 
 var st;function as(){clearTimeout(st);st=setTimeout(function(){localStorage.setItem("arV5h",JSON.stringify(ratings));},1000);}
 
-function buildRefRow(){
-  var en=encodeURIComponent;
-  var ref=document.getElementById("ref-row");
-  ref.innerHTML=
-    '<div class="card"><img src="webp/gokce-f3ee914ba0%20(1).jpg"><div class="label">Original</div></div>'+
-    (NR?'<div class="card"><img src="'+NR+'/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #4ecca3"><div class="label cn">New</div></div>':'')+
-    (PR?'<div class="card"><img src="'+PR+'/step4_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #f0a500"><div class="label cp">Prev</div></div>':'')+
-    '<div class="card"><img src="baseline_rainbow/gokce-f3ee914ba0%20(1).jpg" style="border:2px solid #e94560"><div class="label cb">Base</div></div>'+
-    '<div class="card"><img src="bw.png" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF bw</div></div>'+
-    '<div class="card"><img src="rainbow_Gokce.jpg" style="border:2px solid gold;border-radius:8px"><div class="label" style="color:gold">REF rainbow</div></div>';
-}
-
 async function loadDynamic(){
   // Fetch run info
   try{
@@ -470,9 +613,15 @@ async function loadDynamic(){
     PREV_RATINGS=await fetch("/api/ratings").then(function(r){return r.json();});
   }catch(e){PREV_RATINGS={};}
 
+  try{ SETTINGS=await fetch("/api/settings").then(function(r){return r.json();}); if(!SETTINGS||SETTINGS.done)SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS)); }catch(e){SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));}
+  LOADED_SETTINGS=JSON.parse(JSON.stringify(SETTINGS));   // snapshot for global-change detection
+  try{ IMG_OPTS=await fetch("/api/image_options").then(function(r){return r.json();}); if(typeof IMG_OPTS!=="object"||IMG_OPTS.done)IMG_OPTS={}; }catch(e){IMG_OPTS={};}
+  wireRunCfg();
+  applySettingsToPanel(SETTINGS);
+
   // Build page
-  buildRefRow();
   init();
+  seedImgOpts();
   checkRunning();
 
   // Restore from localStorage
