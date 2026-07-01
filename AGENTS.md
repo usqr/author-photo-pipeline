@@ -1,7 +1,7 @@
 # Author Photo Pipeline - Project Context
 
 ## Purpose
-Converts author portrait photos into stylized B&W images on rainbow gradient backgrounds, matching a hand-crafted reference style (see `rainbow_Gokce.jpg`).
+Converts author portrait photos into stylized portraits on a selectable background (rainbow gradient, leafs, cork, or a custom upload), with an optional B&W conversion step, matching a hand-crafted reference style (see `rainbow_Gokce.jpg`).
 
 ## Pipeline Steps
 1. **AI Upscale (Pass 1)** — Gemini Flash Image API ("Nano Banana"). Enhances each portrait, squaring it via `aspect_ratio="1:1"` (the model no longer squares portraits by default — it preserves the input aspect ratio), then Lanczos-upscales to 2048 px on the long edge. NOTE: Nano Banana caps its own output at ~1 MP (~1024 px) regardless of the `image_size` config on this Vertex endpoint, so true 2K must be done locally (`upscale_long_edge`). Falls back to copying originals if no `service_account.json`.

@@ -8,7 +8,7 @@ Runs each step as a separate pass to avoid OOM from loading all models at once.
   Pass 1.5:  Canvas extension (Gemini) → step1_upscaled/ (in-place)
   Pass 2:    Green screen keying (CorridorKey) → step2_nobg/
   Pass 3:    Color adjustments (per-image ratings) → step3_bw/
-  Pass 4:    Leafs background composite → step4_rainbow/
+  Pass 4:    Background composite → step4_rainbow/
 
 Reads ratings.json for per-image adjustments.
 """
@@ -293,7 +293,11 @@ def effective_extend(settings, options, fname):
 
 
 def effective_bg_match_amount(settings, options, fname):
-    """Resolved colour-match amount (0..100) for one file. 0 when the step is off."""
+    """Resolved colour-match amount (0..100) for one file. 0 when the step is off.
+
+    The global bg_match step gates all per-file colour-match: when it is off,
+    every per-file bg_match override is ignored (returns 0).
+    """
     if not settings["steps"].get("bg_match", True):
         return 0
     entry = options.get(fname)
@@ -1053,11 +1057,11 @@ def run_pipeline(files, ratings, regen_from, settings, options):
                 stem = Path(fname).stem
                 s3_path = STEP3_DIR / (stem + ".png")
                 if not s3_path.exists():
-                    write_progress(4, "Leafs BG", i, total, fname, "skipped")
+                    write_progress(4, "Background", i, total, fname, "skipped")
                     write_progress_file_done(4, fname, "skipped")
                     continue
 
-                write_progress(4, "Leafs BG", i, total, fname)
+                write_progress(4, "Background", i, total, fname)
                 img = Image.open(s3_path).convert("RGBA")
                 w, h = img.size
                 if w != h:
@@ -1066,7 +1070,7 @@ def run_pipeline(files, ratings, regen_from, settings, options):
                     top = (h - side) // 2
                     img = img.crop((left, top, left + side, top + side))
 
-                # Align the person's per-channel histogram to the leaf background
+                # Align the person's per-channel histogram to the background
                 # before compositing, so the subject sits in the foliage palette.
                 strength = bg_match_strength(effective_bg_match_amount(settings, options, fname))
                 if any(s > 0 for s in strength):
@@ -1098,7 +1102,7 @@ def run_pipeline(files, ratings, regen_from, settings, options):
 
     _log("=" * 60)
     _log("PIPELINE: 6 stages running concurrently")
-    _log("  P1:Upscale → P1.25:Green BG → P1.5:Extend → P2:Key → P3:Adjust → P4:Leafs BG")
+    _log("  P1:Upscale → P1.25:Green BG → P1.5:Extend → P2:Key → P3:Adjust → P4:Background")
     _log("=" * 60)
 
     p2_thread = threading.Thread(target=worker_pass2, name="P2", daemon=True)

@@ -171,7 +171,9 @@ var SCALES=[
 ];
 var FILES=[];
 var ratings={};
-var SETTINGS={steps:{upscale:true,canvas_extend:true,bw:true,bg_match:true},bg_match_amount:50,background:"rainbow",custom_background:""};
+var DEFAULT_SETTINGS={steps:{upscale:true,canvas_extend:true,bw:true,bg_match:true},bg_match_amount:50,background:"rainbow",custom_background:""};
+var SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+var LOADED_SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));   // snapshot of settings at page load, for global-change detection
 var CUSTOM_BG="";   // filename of the last uploaded custom background
 var IMG_OPTS={};        // last-saved overrides from server
 var imgOverrides={};    // live per-file overrides {name:{upscale,canvas_extend,bg_match}}
@@ -342,10 +344,21 @@ function startProgressPoll(){
   },2000);
 }
 
+// True when any global setting (background, colour-match amount, steps) changed since load
+function globalSettingsChanged(){
+  return JSON.stringify(getSettings())!==JSON.stringify(LOADED_SETTINGS);
+}
+
 // Rerun (only changed weights)
 function rerun(){
   if(!confirm("Save weights and re-run only changed images?"))return;
-  var payload=JSON.stringify({ratings:ged(),settings:getSettings(),image_options:getImageOptions(),targets:getChangedTargets()});
+  var payload;
+  if(globalSettingsChanged()){
+    // A global setting changed — full re-run so every image recomposites
+    payload=JSON.stringify({ratings:ged(),settings:getSettings(),image_options:getImageOptions(),regenerate:true});
+  }else{
+    payload=JSON.stringify({ratings:ged(),settings:getSettings(),image_options:getImageOptions(),targets:getChangedTargets()});
+  }
   fetch("/api/rerun",{method:"POST",headers:{"Content-Type":"application/json"},body:payload})
     .then(function(r){return r.json();})
     .then(function(d){if(d.status==="started")startProgressPoll();})
@@ -364,7 +377,7 @@ function regenerate(){
 
 // Regenerate from a specific pass (reuse earlier outputs)
 function regenFrom(){
-  var pass=prompt("Regenerate from which pass?\\n\\n1 = Upscale (Gemini)\\n1.5 = Canvas extend (Gemini)\\n2 = Background removal\\n3 = Color adjustments\\n4 = Leafs composite","3");
+  var pass=prompt("Regenerate from which pass?\\n\\n1 = Upscale (Gemini)\\n1.25 = Green background\\n1.5 = Canvas extend (Gemini)\\n2 = Green screen keying\\n3 = Color adjustments\\n4 = Background composite","3");
   if(!pass)return;
   var p=parseFloat(pass);
   if(isNaN(p)||p<1||p>4){alert("Invalid pass number");return;}
@@ -436,8 +449,8 @@ function wireRunCfg(){
 }
 
 // Accordion details
-var PASS_ORDER=["1","1.5","2","3","4"];
-var PASS_NAMES={"1":"Upscale/Copy","1.5":"Canvas Extend","2":"BG Remove","3":"Adjust/B&W","4":"Background"};
+var PASS_ORDER=["1","1.25","1.5","2","3","4"];
+var PASS_NAMES={"1":"Upscale/Copy","1.25":"Green BG","1.5":"Canvas Extend","2":"BG Remove","3":"Adjust/B&W","4":"Background"};
 var detailsOpen=false;
 var openPasses={};
 var detailsBuilt=false;
@@ -599,7 +612,8 @@ async function loadDynamic(){
     PREV_RATINGS=await fetch("/api/ratings").then(function(r){return r.json();});
   }catch(e){PREV_RATINGS={};}
 
-  try{ SETTINGS=await fetch("/api/settings").then(function(r){return r.json();}); }catch(e){}
+  try{ SETTINGS=await fetch("/api/settings").then(function(r){return r.json();}); if(!SETTINGS||SETTINGS.done)SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS)); }catch(e){SETTINGS=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));}
+  LOADED_SETTINGS=JSON.parse(JSON.stringify(SETTINGS));   // snapshot for global-change detection
   try{ IMG_OPTS=await fetch("/api/image_options").then(function(r){return r.json();}); if(typeof IMG_OPTS!=="object"||IMG_OPTS.done)IMG_OPTS={}; }catch(e){IMG_OPTS={};}
   wireRunCfg();
   applySettingsToPanel(SETTINGS);
